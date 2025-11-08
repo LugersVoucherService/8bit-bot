@@ -219,12 +219,12 @@ async def render_command(
         return
     
     try:
-        from app.utils import check_build_cache, write_file_async, calculate_memory_usage
+        from utils import check_build_cache, write_file_async, calculate_memory_usage
         import psutil
-        
+
         # Check cache first
         cached = await check_build_cache(build_file.filename, build_file.size)
-        
+
         if cached:
             model_id = cached['model_id']
             # Get viewer URL directly from cache (gltf_url) - no API call needed!
@@ -237,7 +237,7 @@ async def render_command(
             # Check memory before processing
             memory = psutil.virtual_memory()
             estimated_memory = calculate_memory_usage(build_file.size)
-            
+
             # If memory is too high, wait a bit and check cache again (another user might have uploaded)
             if memory.percent > 85:
                 await asyncio.sleep(0.5)  # Brief wait for concurrent uploads
@@ -252,11 +252,11 @@ async def render_command(
                     build_content = await build_file.read()
                     build_path = TEMP_DIR / f"temp_{build_file.filename}"
                     await write_file_async(build_path, build_content)
-                    
+
                     model_id = generate_model_id()
                     renderer = GLTFRenderer(str(build_path))
                     renderer.parse_build_file()
-                    
+
                     if len(renderer.positions) == 0:
                         embed = discord.Embed(
                             title="Render Error",
@@ -305,11 +305,11 @@ async def render_command(
                 build_content = await build_file.read()
                 build_path = TEMP_DIR / f"temp_{build_file.filename}"
                 await write_file_async(build_path, build_content)
-                
+
                 model_id = generate_model_id()
                 renderer = GLTFRenderer(str(build_path))
                 renderer.parse_build_file()
-                
+
                 if len(renderer.positions) == 0:
                     embed = discord.Embed(
                         title="Render Error",
@@ -353,7 +353,7 @@ async def render_command(
                     )
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
-        
+
         if not viewer_url:
             server_available = await check_web_server_health()
             if server_available:
@@ -370,26 +370,26 @@ async def render_command(
                 cleanup_temp_files(gltf_dir)
                 force_garbage_collection()
                 return
-        
+
         usage_stats = await get_usage_stats()
         expiry_timestamp = int((datetime.now() + timedelta(minutes=10)).timestamp())
-        
+
         embed = discord.Embed(
             title="Build Rendered",
             description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
             color=0x5865F2,
             timestamp=datetime.now()
         )
-        
+
         storage_pct = usage_stats.get('storage_percent', 0)
         a_class_pct = usage_stats.get('a_class_percent', 0)
         b_class_pct = usage_stats.get('b_class_percent', 0)
         embed.set_footer(
             text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
         )
-        
+
         await interaction.followup.send(embed=embed)
-        
+
         force_garbage_collection()
         
     except Exception as e:
@@ -822,12 +822,12 @@ async def render_prefix(ctx, index: int = None):
         return
     
     try:
-        from app.utils import check_build_cache, write_file_async, calculate_memory_usage
+        from utils import check_build_cache, write_file_async, calculate_memory_usage
         import psutil
-        
+
         # Check cache first
         cached = await check_build_cache(build_file.filename, build_file.size)
-        
+
         if cached:
             model_id = cached['model_id']
             # Get viewer URL directly from cache (gltf_url) - no API call needed!
@@ -840,7 +840,7 @@ async def render_prefix(ctx, index: int = None):
             # Check memory before processing
             memory = psutil.virtual_memory()
             estimated_memory = calculate_memory_usage(build_file.size)
-            
+
             # If memory is too high, wait a bit and check cache again (another user might have uploaded)
             if memory.percent > 85:
                 await asyncio.sleep(0.5)  # Brief wait for concurrent uploads
@@ -855,11 +855,11 @@ async def render_prefix(ctx, index: int = None):
                     build_content = await build_file.read()
                     build_path = TEMP_DIR / f"temp_{build_file.filename}"
                     await write_file_async(build_path, build_content)
-                    
+
                     model_id = generate_model_id()
                     renderer = GLTFRenderer(str(build_path))
                     renderer.parse_build_file()
-                    
+
                     if len(renderer.positions) == 0:
                         embed = discord.Embed(
                             title="Render Error",
@@ -908,11 +908,11 @@ async def render_prefix(ctx, index: int = None):
                 build_content = await build_file.read()
                 build_path = TEMP_DIR / f"temp_{build_file.filename}"
                 await write_file_async(build_path, build_content)
-                
+
                 model_id = generate_model_id()
                 renderer = GLTFRenderer(str(build_path))
                 renderer.parse_build_file()
-                
+
                 if len(renderer.positions) == 0:
                     embed = discord.Embed(
                         title="Render Error",
