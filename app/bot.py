@@ -288,7 +288,7 @@ async def render_command(
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
-                        print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                        #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
                     else:
@@ -2229,4 +2229,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
