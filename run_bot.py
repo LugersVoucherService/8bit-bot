@@ -14,8 +14,8 @@ app_dir = script_dir / "app"
 if str(app_dir) not in sys.path:
     sys.path.insert(0, str(app_dir))
 
-# Now import bot
-from app.bot import main
+# Now import bot (directly from bot module since app_dir is in path)
+from bot import main
 
 if __name__ == "__main__":
     main()
