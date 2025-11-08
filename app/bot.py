@@ -70,7 +70,7 @@ def has_member_access(user) -> bool:
         return True
     # Check if user is a Member (has roles) and is in the correct guild
     if isinstance(user, discord.Member):
-        if hasattr(user, 'guild') and user.guild and user.guild.id == ALLOWED_GUILD_ID:
+        if user.guild and user.guild.id == ALLOWED_GUILD_ID:
             return any(role.id == STAFF_ROLE_ID for role in user.roles)
     return False
 
@@ -80,7 +80,7 @@ def has_dev_access(user) -> bool:
         return True
     # Check if user is a Member (has roles) and is in the correct guild
     if isinstance(user, discord.Member):
-        if hasattr(user, 'guild') and user.guild and user.guild.id == ALLOWED_GUILD_ID:
+        if user.guild and user.guild.id == ALLOWED_GUILD_ID:
             return any(role.id == DEV_ROLE_ID for role in user.roles)
     return False
 
@@ -246,7 +246,7 @@ async def render_command(
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    #print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
+                    print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
                     build_content = await build_file.read()
@@ -288,7 +288,7 @@ async def render_command(
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
-                        #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                        print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
                     else:
@@ -341,7 +341,7 @@ async def render_command(
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                    print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
                 else:
@@ -835,7 +835,7 @@ async def render_prefix(ctx, index: int = None):
             # Construct viewer URL from model_id (gltf_url is stored but we use model_id for viewer)
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
-            #print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
+            print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
         else:
             # Check memory before processing
             memory = psutil.virtual_memory()
@@ -849,7 +849,7 @@ async def render_prefix(ctx, index: int = None):
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    #print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
+                    print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
                     build_content = await build_file.read()
@@ -891,7 +891,7 @@ async def render_prefix(ctx, index: int = None):
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
-                        #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                        print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
                     else:
@@ -944,7 +944,7 @@ async def render_prefix(ctx, index: int = None):
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                    print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
                 else:
@@ -1757,11 +1757,12 @@ async def on_message(message: discord.Message):
                 for i, cmd_data in enumerate(commands_list):
                     cmd, desc, level, aliases, cooldown = cmd_data
                     alias_str = " • ".join([f"`{alias}`" for alias in aliases])
-                    # Compact format: command - description (Aliases: ...) [Cooldown: ...]
-                    cooldown_text = f" *[Cooldown: {cooldown}]*" if cooldown else ""
+                    # Clean format: command - description (Aliases: ...) [Cooldown: ...]
+                    cooldown_text = f" [Cooldown: {cooldown}]" if cooldown else ""
                     # Add divider between commands (except for the first one)
-                    divider = "─" * 40 + "\n" if i > 0 else ""
-                    command_text = f"{divider}**{cmd}** - {desc} *(Aliases: {alias_str})*{cooldown_text}\n"
+                    divider = "────────────────────────────────────────\n" if i > 0 else ""
+                    # Use proper markdown formatting without nested italics
+                    command_text = f"{divider}{cmd} - {desc}\nAliases: {alias_str}{cooldown_text}\n\n"
                     command_length = len(command_text)
                     
                     # If adding this command would exceed max_length, start a new part
@@ -2229,6 +2230,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
