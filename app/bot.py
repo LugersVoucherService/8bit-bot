@@ -266,13 +266,13 @@ async def render_command(
                         await interaction.followup.send(embed=embed)
                         cleanup_temp_files(build_path)
                         return
-                    
+
                     gltf_dir = TEMP_DIR / model_id
                     gltf_dir.mkdir(exist_ok=True)
                     gltf_path = gltf_dir / f"{model_id}.gltf"
-                    
+
                     center, max_size = renderer.export_to_gltf(str(gltf_path))
-                    
+
                     html_content = renderer.create_viewer_html(
                         f"{model_id}.gltf",
                         center,
@@ -281,7 +281,7 @@ async def render_command(
                     )
                     html_path = gltf_dir / "index.html"
                     await write_file_async(html_path, html_content.encode('utf-8'))
-                    
+
                     # Check cache one more time before upload (catch concurrent duplicates)
                     cached = await check_build_cache(build_file.filename, build_file.size)
                     if cached:
@@ -293,7 +293,7 @@ async def render_command(
                         cleanup_temp_files(gltf_dir)
                     else:
                         viewer_url = await upload_gltf_to_server(
-                            str(gltf_path), 
+                            str(gltf_path),
                             model_id,
                             build_filename=build_file.filename,
                             build_size=build_file.size
@@ -319,13 +319,13 @@ async def render_command(
                     await interaction.followup.send(embed=embed)
                     cleanup_temp_files(build_path)
                     return
-                
+
                 gltf_dir = TEMP_DIR / model_id
                 gltf_dir.mkdir(exist_ok=True)
                 gltf_path = gltf_dir / f"{model_id}.gltf"
-                
+
                 center, max_size = renderer.export_to_gltf(str(gltf_path))
-                
+
                 html_content = renderer.create_viewer_html(
                     f"{model_id}.gltf",
                     center,
@@ -334,7 +334,7 @@ async def render_command(
                 )
                 html_path = gltf_dir / "index.html"
                 await write_file_async(html_path, html_content.encode('utf-8'))
-                
+
                 # Check cache one more time before upload (catch concurrent duplicates)
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
@@ -346,7 +346,7 @@ async def render_command(
                     cleanup_temp_files(gltf_dir)
                 else:
                     viewer_url = await upload_gltf_to_server(
-                        str(gltf_path), 
+                        str(gltf_path),
                         model_id,
                         build_filename=build_file.filename,
                         build_size=build_file.size
@@ -869,13 +869,13 @@ async def render_prefix(ctx, index: int = None):
                         await ctx.send(embed=embed)
                         cleanup_temp_files(build_path)
                         return
-                    
+
                     gltf_dir = TEMP_DIR / model_id
                     gltf_dir.mkdir(exist_ok=True)
                     gltf_path = gltf_dir / f"{model_id}.gltf"
-                    
+
                     center, max_size = renderer.export_to_gltf(str(gltf_path))
-                    
+
                     html_content = renderer.create_viewer_html(
                         f"{model_id}.gltf",
                         center,
@@ -884,7 +884,7 @@ async def render_prefix(ctx, index: int = None):
                     )
                     html_path = gltf_dir / "index.html"
                     await write_file_async(html_path, html_content.encode('utf-8'))
-                    
+
                     # Check cache one more time before upload (catch concurrent duplicates)
                     cached = await check_build_cache(build_file.filename, build_file.size)
                     if cached:
@@ -896,7 +896,7 @@ async def render_prefix(ctx, index: int = None):
                         cleanup_temp_files(gltf_dir)
                     else:
                         viewer_url = await upload_gltf_to_server(
-                            str(gltf_path), 
+                            str(gltf_path),
                             model_id,
                             build_filename=build_file.filename,
                             build_size=build_file.size
@@ -922,13 +922,13 @@ async def render_prefix(ctx, index: int = None):
                     await ctx.send(embed=embed)
                     cleanup_temp_files(build_path)
                     return
-                
+
                 gltf_dir = TEMP_DIR / model_id
                 gltf_dir.mkdir(exist_ok=True)
                 gltf_path = gltf_dir / f"{model_id}.gltf"
-                
+
                 center, max_size = renderer.export_to_gltf(str(gltf_path))
-                
+
                 html_content = renderer.create_viewer_html(
                     f"{model_id}.gltf",
                     center,
@@ -937,7 +937,7 @@ async def render_prefix(ctx, index: int = None):
                 )
                 html_path = gltf_dir / "index.html"
                 await write_file_async(html_path, html_content.encode('utf-8'))
-                
+
                 # Check cache one more time before upload (catch concurrent duplicates)
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
@@ -949,14 +949,14 @@ async def render_prefix(ctx, index: int = None):
                     cleanup_temp_files(gltf_dir)
                 else:
                     viewer_url = await upload_gltf_to_server(
-                        str(gltf_path), 
+                        str(gltf_path),
                         model_id,
                         build_filename=build_file.filename,
                         build_size=build_file.size
                     )
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
-        
+
         if not viewer_url:
             embed = discord.Embed(
                 title="Web Server Unavailable",
