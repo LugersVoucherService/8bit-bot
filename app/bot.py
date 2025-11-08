@@ -44,7 +44,8 @@ from utils import (
     force_garbage_collection,
     get_usage_stats,
     get_cached_builds,
-    delete_model_from_backend
+    delete_model_from_backend,
+    get_active_server_url
 )
 from renderer import GLTFRenderer
 
@@ -155,7 +156,6 @@ async def render_command(
                 return
             
             # Get viewer URL from model_id
-            from utils import get_active_server_url
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
             
@@ -230,7 +230,6 @@ async def render_command(
             # Get viewer URL directly from cache (gltf_url) - no API call needed!
             gltf_url = cached.get('gltf_url', cached.get('url'))
             # Construct viewer URL from model_id (gltf_url is stored but we use model_id for viewer)
-            from utils import get_active_server_url
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
             print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
@@ -245,7 +244,6 @@ async def render_command(
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
                     model_id = cached['model_id']
-                    from utils import get_active_server_url
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
@@ -288,7 +286,6 @@ async def render_command(
                     cached = await check_build_cache(build_file.filename, build_file.size)
                     if cached:
                         model_id = cached['model_id']
-                        from utils import get_active_server_url
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
@@ -342,7 +339,6 @@ async def render_command(
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
                     model_id = cached['model_id']
-                    from utils import get_active_server_url
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
@@ -361,7 +357,6 @@ async def render_command(
         if not viewer_url:
             server_available = await check_web_server_health()
             if server_available:
-                from utils import get_active_server_url
                 server_url = await get_active_server_url()
                 viewer_url = f"{server_url}/model?model_id={model_id}"
             else:
@@ -760,7 +755,6 @@ async def render_prefix(ctx, index: int = None):
                 return
             
             # Get viewer URL from model_id
-            from utils import get_active_server_url
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
             
@@ -839,7 +833,6 @@ async def render_prefix(ctx, index: int = None):
             # Get viewer URL directly from cache (gltf_url) - no API call needed!
             gltf_url = cached.get('gltf_url', cached.get('url'))
             # Construct viewer URL from model_id (gltf_url is stored but we use model_id for viewer)
-            from utils import get_active_server_url
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
             print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
@@ -854,7 +847,6 @@ async def render_prefix(ctx, index: int = None):
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
                     model_id = cached['model_id']
-                    from utils import get_active_server_url
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
@@ -897,7 +889,6 @@ async def render_prefix(ctx, index: int = None):
                     cached = await check_build_cache(build_file.filename, build_file.size)
                     if cached:
                         model_id = cached['model_id']
-                        from utils import get_active_server_url
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
@@ -951,7 +942,6 @@ async def render_prefix(ctx, index: int = None):
                 cached = await check_build_cache(build_file.filename, build_file.size)
                 if cached:
                     model_id = cached['model_id']
-                    from utils import get_active_server_url
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
