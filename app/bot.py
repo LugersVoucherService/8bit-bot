@@ -689,6 +689,313 @@ async def delete_command(interaction: discord.Interaction, model_id: str):
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+# ==================== PERMISSION MANAGEMENT COMMANDS (Owner Only) ====================
+
+@tree.command(name="check-permissions", description="Check who has specific permissions (Owner only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
+@app_commands.describe(
+    permission_type="Type of permission to check (member or dev)"
+)
+@app_commands.choices(permission_type=[
+    app_commands.Choice(name="Member", value="member"),
+    app_commands.Choice(name="Developer", value="dev")
+])
+async def check_permissions_command(interaction: discord.Interaction, permission_type: str):
+    """Check who has member or developer permissions"""
+    if interaction.user.id != OWNER_ID:
+        embed = discord.Embed(
+            title="Access Denied",
+            description="Only the bot owner can use this command.",
+            color=0xED4245
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild:
+        embed = discord.Embed(
+            title="Error",
+            description="Could not find the guild.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    if permission_type == "member":
+        role_id = STAFF_ROLE_ID
+        role_name = "Member (Staff)"
+        access_func = has_member_access
+    else:
+        role_id = DEV_ROLE_ID
+        role_name = "Developer"
+        access_func = has_dev_access
+    
+    role = guild.get_role(role_id)
+    if not role:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Could not find the {role_name} role.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Get all members with this role
+    members_with_role = [member for member in guild.members if role in member.roles]
+    
+    # Also check owner
+    owner = guild.get_member(OWNER_ID)
+    owner_has_access = owner and access_func(owner)
+    
+    # Build list
+    user_list = []
+    if owner_has_access:
+        user_list.append(f"👑 **{owner.display_name}** ({owner.mention}) - Owner")
+    
+    for member in sorted(members_with_role, key=lambda m: m.display_name.lower()):
+        if member.id != OWNER_ID:  # Don't duplicate owner
+            user_list.append(f"• **{member.display_name}** ({member.mention})")
+    
+    if not user_list:
+        embed = discord.Embed(
+            title=f"{role_name} Permissions",
+            description=f"No users have {role_name.lower()} permissions.",
+            color=0x5865F2
+        )
+    else:
+        user_text = "\n".join(user_list[:50])  # Limit to 50 users
+        if len(user_list) > 50:
+            user_text += f"\n\n... and {len(user_list) - 50} more"
+        
+        embed = discord.Embed(
+            title=f"{role_name} Permissions",
+            description=f"Users with {role_name.lower()} permissions:\n\n{user_text}",
+            color=0x5865F2,
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text=f"Total: {len(user_list)} user(s)")
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@tree.command(name="grant-access", description="Grant elevated access to a user (Owner only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
+@app_commands.describe(
+    user="User to grant access to",
+    access_level="Level of access to grant"
+)
+@app_commands.choices(access_level=[
+    app_commands.Choice(name="Member (Staff)", value="member"),
+    app_commands.Choice(name="Developer", value="dev")
+])
+async def grant_access_command(interaction: discord.Interaction, user: discord.Member, access_level: str):
+    """Grant member or developer access to a user"""
+    if interaction.user.id != OWNER_ID:
+        embed = discord.Embed(
+            title="Access Denied",
+            description="Only the bot owner can use this command.",
+            color=0xED4245
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild:
+        embed = discord.Embed(
+            title="Error",
+            description="Could not find the guild.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    if access_level == "member":
+        role_id = STAFF_ROLE_ID
+        role_name = "Member (Staff)"
+    else:
+        role_id = DEV_ROLE_ID
+        role_name = "Developer"
+    
+    role = guild.get_role(role_id)
+    if not role:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Could not find the {role_name} role.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if bot has permission to manage roles
+    if not guild.me.guild_permissions.manage_roles:
+        embed = discord.Embed(
+            title="Error",
+            description="Bot does not have permission to manage roles.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if role is higher than bot's highest role
+    if role >= guild.me.top_role:
+        embed = discord.Embed(
+            title="Error",
+            description=f"The {role_name} role is higher than the bot's highest role. Please move the bot's role above this role.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if user already has the role
+    if role in user.roles:
+        embed = discord.Embed(
+            title="Already Has Access",
+            description=f"{user.mention} already has {role_name.lower()} permissions.",
+            color=0xFFA500
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    try:
+        await user.add_roles(role, reason=f"Granted {role_name} access by {interaction.user}")
+        embed = discord.Embed(
+            title="Access Granted",
+            description=f"Successfully granted {role_name.lower()} permissions to {user.mention}.",
+            color=0x57F287,
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text=f"Granted by {interaction.user.display_name}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.Forbidden:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Bot does not have permission to add roles to {user.mention}.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Failed to grant access: {str(e)}",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+@tree.command(name="revoke-access", description="Revoke elevated access from a user (Owner only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
+@app_commands.describe(
+    user="User to revoke access from",
+    access_level="Level of access to revoke"
+)
+@app_commands.choices(access_level=[
+    app_commands.Choice(name="Member (Staff)", value="member"),
+    app_commands.Choice(name="Developer", value="dev")
+])
+async def revoke_access_command(interaction: discord.Interaction, user: discord.Member, access_level: str):
+    """Revoke member or developer access from a user"""
+    if interaction.user.id != OWNER_ID:
+        embed = discord.Embed(
+            title="Access Denied",
+            description="Only the bot owner can use this command.",
+            color=0xED4245
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    guild = bot.get_guild(ALLOWED_GUILD_ID)
+    if not guild:
+        embed = discord.Embed(
+            title="Error",
+            description="Could not find the guild.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    if access_level == "member":
+        role_id = STAFF_ROLE_ID
+        role_name = "Member (Staff)"
+    else:
+        role_id = DEV_ROLE_ID
+        role_name = "Developer"
+    
+    role = guild.get_role(role_id)
+    if not role:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Could not find the {role_name} role.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if bot has permission to manage roles
+    if not guild.me.guild_permissions.manage_roles:
+        embed = discord.Embed(
+            title="Error",
+            description="Bot does not have permission to manage roles.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if role is higher than bot's highest role
+    if role >= guild.me.top_role:
+        embed = discord.Embed(
+            title="Error",
+            description=f"The {role_name} role is higher than the bot's highest role. Please move the bot's role above this role.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Check if user has the role
+    if role not in user.roles:
+        embed = discord.Embed(
+            title="No Access",
+            description=f"{user.mention} does not have {role_name.lower()} permissions.",
+            color=0xFFA500
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Prevent revoking from owner
+    if user.id == OWNER_ID:
+        embed = discord.Embed(
+            title="Error",
+            description="Cannot revoke access from the bot owner.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    try:
+        await user.remove_roles(role, reason=f"Revoked {role_name} access by {interaction.user}")
+        embed = discord.Embed(
+            title="Access Revoked",
+            description=f"Successfully revoked {role_name.lower()} permissions from {user.mention}.",
+            color=0x57F287,
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text=f"Revoked by {interaction.user.display_name}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.Forbidden:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Bot does not have permission to remove roles from {user.mention}.",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        embed = discord.Embed(
+            title="Error",
+            description=f"Failed to revoke access: {str(e)}",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 # Prefix commands with '*' (mirror slash commands)
 @bot.command(name="render", aliases=["r"])
 @commands.cooldown(1, 30.0, commands.BucketType.user)  # 30 second cooldown per user
