@@ -1,0 +1,11 @@
+# 8Bit Bot Requirements (for Railway deployment)
+
+# Discord Bot (src/)
+discord.py>=2.3.0
+httpx>=0.24.0
+numpy>=1.24.0
+psutil>=5.9.0
+aiofiles>=23.2.0
+
+# Note: Backend API dependencies (flask, flask-cors, boto3, requests) are NOT needed
+# for the bot deployment - they're only needed for the backend API server
