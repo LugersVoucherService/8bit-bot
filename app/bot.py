@@ -246,7 +246,7 @@ async def render_command(
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
+                    #print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
                     build_content = await build_file.read()
@@ -341,7 +341,7 @@ async def render_command(
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                    #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
                 else:
@@ -835,7 +835,7 @@ async def render_prefix(ctx, index: int = None):
             # Construct viewer URL from model_id (gltf_url is stored but we use model_id for viewer)
             server_url = await get_active_server_url()
             viewer_url = f"{server_url}/model?model_id={model_id}"
-            print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
+            #print(f"Cache hit: {build_file.filename} ({build_file.size} bytes) -> {model_id} (reused, no render, no R2 API call)")
         else:
             # Check memory before processing
             memory = psutil.virtual_memory()
@@ -849,7 +849,7 @@ async def render_prefix(ctx, index: int = None):
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
+                    #print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
                     build_content = await build_file.read()
@@ -891,7 +891,7 @@ async def render_prefix(ctx, index: int = None):
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
                         viewer_url = f"{server_url}/model?model_id={model_id}"
-                        print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                        #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
                     else:
@@ -944,7 +944,7 @@ async def render_prefix(ctx, index: int = None):
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
                     viewer_url = f"{server_url}/model?model_id={model_id}"
-                    print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
+                    #print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
                 else:
@@ -2229,5 +2229,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
