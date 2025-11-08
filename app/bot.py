@@ -289,8 +289,8 @@ async def render_command(
                     if cached:
                         model_id = cached['model_id']
                         from utils import get_active_server_url
-            server_url = await get_active_server_url()
-            viewer_url = f"{server_url}/model?model_id={model_id}"
+                        server_url = await get_active_server_url()
+                        viewer_url = f"{server_url}/model?model_id={model_id}"
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
@@ -898,8 +898,8 @@ async def render_prefix(ctx, index: int = None):
                     if cached:
                         model_id = cached['model_id']
                         from utils import get_active_server_url
-            server_url = await get_active_server_url()
-            viewer_url = f"{server_url}/model?model_id={model_id}"
+                        server_url = await get_active_server_url()
+                        viewer_url = f"{server_url}/model?model_id={model_id}"
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
