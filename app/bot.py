@@ -18,9 +18,9 @@ import re
 from urllib.parse import urlparse, parse_qs, unquote
 from io import BytesIO
 
-src_dir = os.path.dirname(os.path.abspath(__file__))
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
+app_dir = os.path.dirname(os.path.abspath(__file__))
+if app_dir not in sys.path:
+    sys.path.insert(0, app_dir)
 
 from config import (
     DISCORD_BOT_TOKEN,
@@ -219,7 +219,7 @@ async def render_command(
         return
     
     try:
-        from src.utils import check_build_cache, write_file_async, calculate_memory_usage
+        from app.utils import check_build_cache, write_file_async, calculate_memory_usage
         import psutil
         
         # Check cache first
@@ -246,8 +246,8 @@ async def render_command(
                 if cached:
                     model_id = cached['model_id']
                     from utils import get_active_server_url
-            server_url = await get_active_server_url()
-            viewer_url = f"{server_url}/model?model_id={model_id}"
+                    server_url = await get_active_server_url()
+                    viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
@@ -828,7 +828,7 @@ async def render_prefix(ctx, index: int = None):
         return
     
     try:
-        from src.utils import check_build_cache, write_file_async, calculate_memory_usage
+        from app.utils import check_build_cache, write_file_async, calculate_memory_usage
         import psutil
         
         # Check cache first
@@ -855,8 +855,8 @@ async def render_prefix(ctx, index: int = None):
                 if cached:
                     model_id = cached['model_id']
                     from utils import get_active_server_url
-            server_url = await get_active_server_url()
-            viewer_url = f"{server_url}/model?model_id={model_id}"
+                    server_url = await get_active_server_url()
+                    viewer_url = f"{server_url}/model?model_id={model_id}"
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
