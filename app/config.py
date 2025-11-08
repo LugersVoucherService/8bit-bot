@@ -25,3 +25,4 @@ if not WEB_SERVER_URL_PRIMARY:
 
 if not WEB_SERVER_SECRET:
     raise ValueError("WEB_SERVER_SECRET environment variable must be set")
+
