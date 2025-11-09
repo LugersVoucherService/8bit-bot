@@ -322,23 +322,24 @@ async def delete_model_from_backend(model_id: str) -> bool:
 
 async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[str]:
     """
-    Upload GLTF file directly to R2 from the bot (bypasses web server file size limits)
+    Upload GLTF file directly to R2 (bypasses web server file size limits)
     Returns the public R2 URL if successful, None otherwise
-    Supports files up to 100MB (R2 free tier limit is much higher)
     """
     try:
-        import boto3
-        from botocore.exceptions import ClientError
         import os
-        
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+        except ModuleNotFoundError:
+            print("boto3 not installed; cannot upload directly to R2.")
+            return None
+
         file_size = os.path.getsize(gltf_path)
         print(f"Uploading {model_id}.gltf directly to R2 (size: {file_size / 1024 / 1024:.1f}MB)")
-        
-        # Run boto3 operations in executor to avoid blocking
+
         loop = asyncio.get_event_loop()
-        
+
         def _upload_to_r2():
-            # Create S3 client for R2
             s3_client = boto3.client(
                 's3',
                 endpoint_url=R2_ENDPOINT_URL,
@@ -346,10 +347,8 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
                 aws_secret_access_key=R2_SECRET_ACCESS_KEY,
                 region_name='auto'
             )
-            
+
             key = f"{model_id}.gltf"
-            
-            # Upload file using streaming to avoid loading entire file into memory
             with open(gltf_path, 'rb') as file_obj:
                 s3_client.upload_fileobj(
                     file_obj,
@@ -357,17 +356,16 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
                     key,
                     ExtraArgs={
                         'ContentType': 'model/gltf+json',
-                        'CacheControl': 'public, max-age=31536000'  # 1 year cache
+                        'CacheControl': 'public, max-age=31536000'
                     }
                 )
-            
+
             return f"{R2_PUBLIC_URL}/{key}"
-        
-        # Run upload in executor
+
         public_url = await loop.run_in_executor(None, _upload_to_r2)
         print(f"Successfully uploaded {model_id}.gltf directly to R2: {public_url}")
         return public_url
-        
+
     except ClientError as e:
         print(f"R2 direct upload error: {e}")
         return None
@@ -376,6 +374,7 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
         import traceback
         traceback.print_exc()
         return None
+
 
 async def register_model_with_r2_url(model_id: str, r2_url: str, build_filename: Optional[str] = None, build_size: Optional[int] = None, build_hash: Optional[str] = None, preview_url: Optional[str] = None) -> Optional[str]:
     """
@@ -421,4 +420,5 @@ async def register_model_with_r2_url(model_id: str, r2_url: str, build_filename:
         import traceback
         traceback.print_exc()
         return None
+
 
