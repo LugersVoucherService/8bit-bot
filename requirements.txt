@@ -1,10 +1,19 @@
 # 8Bit Bot Requirements
 
-# Discord Bot (src/)
+# Discord Bot (app/)
 discord.py>=2.3.0
 httpx>=0.24.0
 numpy>=1.24.0
 psutil>=5.9.0
 aiofiles>=23.2.0
+boto3>=1.28.0
 
+# Backend API (backend/)
+flask>=2.3.0
+flask-cors>=4.0.0
+boto3>=1.28.0
+requests>=2.31.0
+
+# Renderer (shared)
 numpy>=1.24.0
+
