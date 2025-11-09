@@ -330,6 +330,10 @@ class GLTFRenderer:
             'TitaniumRod': (0.6, 0.6, 0.8),
             'CameraDome': (0.2, 0.8, 0.2),
             'CarSeat': (0.8, 0.2, 0.2),
+            # Wood blocks - light brown wooden boxes (game blocks)
+            'WoodBlock': (0.75, 0.65, 0.50),  # Light brown wood color
+            'Wood': (0.75, 0.65, 0.50),
+            'GameBlock': (0.75, 0.65, 0.50),  # Game blocks are often wood
         }
         return color_map.get(block_type, (0.5, 0.5, 0.5))
     
@@ -351,38 +355,50 @@ class GLTFRenderer:
         
         return (0.5, 0.5, 0.5)
     
-    def _rotation_matrix_lh(self, rotation_deg: np.ndarray) -> np.ndarray:
+    def _build_roblox_rotation_matrix(self, rotation_deg: np.ndarray) -> np.ndarray:
         """
-        Build rotation matrix in left-handed coordinate system (Roblox native).
-        Roblox CFrame.angles(x, y, z) uses intrinsic ZXY Euler angle order.
-        Rotation order: Z first, then X, then Y (intrinsic: Rz @ Rx @ Ry).
+        Build rotation matrix that exactly matches Roblox CFrame.angles(rx, ry, rz).
+        
+        Roblox uses YXZ rotation order in a left-handed coordinate system.
+        To convert to right-handed (GLTF), we:
+        1. Negate the Z rotation angle (flip handedness)
+        2. Apply rotations in YXZ order for right-handed system
         """
         rx, ry, rz = np.radians(rotation_deg)
-        cos_rx, sin_rx = np.cos(rx), np.sin(rx)
-        cos_ry, sin_ry = np.cos(ry), np.sin(ry)
-        cos_rz, sin_rz = np.cos(rz), np.sin(rz)
         
-        # Left-handed rotation matrices
-        Rz_lh = np.array([[cos_rz, -sin_rz, 0], [sin_rz, cos_rz, 0], [0, 0, 1]])
-        Rx_lh = np.array([[1, 0, 0], [0, cos_rx, -sin_rx], [0, sin_rx, cos_rx]])
-        Ry_lh = np.array([[cos_ry, 0, -sin_ry], [0, 1, 0], [sin_ry, 0, cos_ry]])
+        # Convert from left-handed to right-handed by negating Z rotation
+        rz_rh = -rz
         
-        # Intrinsic ZXY order: Rz @ Rx @ Ry
-        return Rz_lh @ Rx_lh @ Ry_lh
-    
-    def rotation_matrix(self, rotation_deg: np.ndarray) -> np.ndarray:
-        """
-        Roblox CFrame.angles(x, y, z) rotation matrix - PERFECT conversion.
-        Builds rotation in left-handed system, then converts to right-handed.
-        """
-        R_lh = self._rotation_matrix_lh(rotation_deg)
+        # Build rotation matrices for right-handed Y-up coordinate system
+        cosx, sinx = np.cos(rx), np.sin(rx)
+        cosy, siny = np.cos(ry), np.sin(ry)
+        cosz, sinz = np.cos(rz_rh), np.sin(rz_rh)
         
-        # Convert rotation matrix from left-handed to right-handed
-        # Use transformation: R_rh = Z_flip @ R_lh @ Z_flip
-        z_flip = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])
-        R_rh = z_flip @ R_lh @ z_flip
+        # Y rotation (yaw) - right-handed
+        Ry = np.array([
+            [cosy, 0, -siny],
+            [0, 1, 0],
+            [siny, 0, cosy]
+        ], dtype=np.float32)
         
-        return R_rh
+        # X rotation (pitch) - right-handed
+        Rx = np.array([
+            [1, 0, 0],
+            [0, cosx, sinx],
+            [0, -sinx, cosx]
+        ], dtype=np.float32)
+        
+        # Z rotation (roll) - right-handed
+        Rz = np.array([
+            [cosz, sinz, 0],
+            [-sinz, cosz, 0],
+            [0, 0, 1]
+        ], dtype=np.float32)
+        
+        # Apply in YXZ order: Ry * Rx * Rz
+        R = Ry @ Rx @ Rz
+        
+        return R
     
     def compute_scaled_counts(self) -> Dict[str, int]:
         """
@@ -561,8 +577,8 @@ class GLTFRenderer:
                 if block_idx >= len(self.rotations):
                     print(f"WARNING: block_idx {block_idx} >= len(rotations) {len(self.rotations)}, using default")
                 
-                # Get position and rotation from Roblox (left-handed coordinate system)
-                position_lh = self.positions[block_idx].copy()
+                # Get position and rotation from Roblox
+                position_roblox = self.positions[block_idx].copy()
                 size = self.sizes[block_idx] if block_idx < len(self.sizes) else np.array([1.0, 1.0, 1.0])
                 rotation = self.rotations[block_idx] if block_idx < len(self.rotations) else np.array([0, 0, 0])
                 
@@ -574,9 +590,15 @@ class GLTFRenderer:
                 size = np.abs(size)
                 size = np.clip(size, 0.01, 10000.0)
                 
+                # Convert position from Roblox (left-handed) to GLTF (right-handed)
+                # Roblox: +X right, +Y up, +Z forward (left-handed)
+                # GLTF: +X right, +Y up, +Z backward (right-handed)
+                position = position_roblox.copy()
+                position[2] = -position[2]  # Flip Z axis
+                
+                # Build cube corners in local space (before rotation)
                 half_size = size / 2.0
-                # Build corners in left-handed coordinate system
-                corners_lh = np.array([
+                corners_local = np.array([
                     [-half_size[0], -half_size[1], -half_size[2]],  # 0
                     [ half_size[0], -half_size[1], -half_size[2]],  # 1
                     [ half_size[0],  half_size[1], -half_size[2]],  # 2
@@ -587,47 +609,34 @@ class GLTFRenderer:
                     [-half_size[0],  half_size[1],  half_size[2]],  # 7
                 ], dtype=np.float32)
                 
-                # Apply rotation in left-handed coordinate system first
-                if np.any(rotation != 0):
-                    R_lh = self._rotation_matrix_lh(rotation)
-                    corners_lh = (corners_lh @ R_lh.T)
+                # Get rotation matrix that matches Roblox CFrame.angles
+                R = self._build_roblox_rotation_matrix(rotation)
                 
-                # Add position in left-handed system
-                corners_lh = corners_lh + position_lh
-                
-                # Convert everything from left-handed to right-handed (flip Z)
-                corners = corners_lh.copy()
-                corners[:, 2] = -corners[:, 2]
-                
+                # Apply rotation and translation to corners
+                corners = (corners_local @ R.T) + position
+
                 # Face definitions with normals (4 vertices per face, 6 faces = 24 vertices)
                 face_defs = [
                     ([0, 1, 2, 3], [0, 0, -1]),   # Back (-Z)
                     ([4, 7, 6, 5], [0, 0, 1]),    # Front (+Z)
                     ([0, 4, 5, 1], [0, -1, 0]),   # Bottom (-Y)
-                    ([2, 6, 7, 3], [0, 1, 0]),   # Top (+Y)
+                    ([2, 6, 7, 3], [0, 1, 0]),    # Top (+Y)
                     ([0, 3, 7, 4], [-1, 0, 0]),   # Left (-X)
-                    ([1, 5, 6, 2], [1, 0, 0]),   # Right (+X)
+                    ([1, 5, 6, 2], [1, 0, 0]),    # Right (+X)
                 ]
                 
                 base_vertex_idx = len(group_vertices)
                 
-                for corner_indices, normal in face_defs:
-                    # Apply rotation in left-handed coordinate system first
-                    normal_lh = np.array(normal)
-                    if np.any(rotation != 0):
-                        R_lh = self._rotation_matrix_lh(rotation)
-                        rotated_normal_lh = (R_lh @ normal_lh)
-                    else:
-                        rotated_normal_lh = normal_lh
-                    
-                    # Convert normal from left-handed to right-handed (flip Z)
-                    rotated_normal = rotated_normal_lh.copy()
-                    rotated_normal[2] = -rotated_normal[2]
-                    rotated_normal = rotated_normal.tolist()
-                    
+                # Get rotation matrix for transforming normals
+                R = self._build_roblox_rotation_matrix(rotation)
+                
+                for corner_indices, normal_base in face_defs:
+                    # Transform normal by rotation matrix
+                    normal_transformed = (R @ np.array(normal_base)).tolist()
+
                     for corner_idx in corner_indices:
                         group_vertices.append(corners[corner_idx].tolist())
-                        group_normals.append(rotated_normal)
+                        group_normals.append(normal_transformed)
                 
                 for face_idx in range(6):
                     v0 = base_vertex_idx + face_idx * 4
@@ -1044,4 +1053,3 @@ class GLTFRenderer:
 </html>"""
         
         return html_content
-

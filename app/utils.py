@@ -10,9 +10,17 @@ from typing import Optional
 import httpx
 
 try:
-    from config import WEB_SERVER_URL_PRIMARY, WEB_SERVER_URL_FALLBACK, WEB_SERVER_SECRET
+    from config import (
+        WEB_SERVER_URL_PRIMARY, WEB_SERVER_URL_FALLBACK, WEB_SERVER_SECRET,
+        R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
+        R2_ENDPOINT_URL, R2_PUBLIC_URL
+    )
 except ImportError:
-    from .config import WEB_SERVER_URL_PRIMARY, WEB_SERVER_URL_FALLBACK, WEB_SERVER_SECRET
+    from .config import (
+        WEB_SERVER_URL_PRIMARY, WEB_SERVER_URL_FALLBACK, WEB_SERVER_SECRET,
+        R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
+        R2_ENDPOINT_URL, R2_PUBLIC_URL
+    )
 
 _current_server_url = None
 
@@ -25,10 +33,45 @@ async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: O
     """
     Upload GLTF file to the web server (memory-efficient for Railway)
     Returns the viewer URL if successful, None otherwise
+    For files > 2MB, uploads directly to R2 (bypasses web server file size limits)
     """
     try:
         import os
         # Read file asynchronously in chunks to avoid loading entire file into memory
+        file_size = os.path.getsize(gltf_path)
+        
+        # For files > 2MB, upload directly to R2 (bypasses PythonAnywhere 2MB limit and Vercel 4.5MB limit)
+        # This allows files up to 100MB on free tier
+        if file_size > 2 * 1024 * 1024:  # 2MB
+            print(f"File size ({file_size / 1024 / 1024:.1f}MB) exceeds web server limits, uploading directly to R2")
+            # Upload directly to R2
+            r2_url = await upload_gltf_direct_to_r2(gltf_path, model_id)
+            if not r2_url:
+                print("Direct R2 upload failed, falling back to web server upload")
+                # Fall back to web server upload (will try Vercel)
+                return await _upload_via_web_server(gltf_path, model_id, build_filename, build_size, build_hash)
+            
+            # Register model with backend using R2 URL
+            viewer_url = await register_model_with_r2_url(
+                model_id, r2_url, build_filename, build_size, build_hash
+            )
+            return viewer_url
+        else:
+            # For files <= 2MB, use web server upload (faster for small files)
+            return await _upload_via_web_server(gltf_path, model_id, build_filename, build_size, build_hash)
+    except Exception as e:
+        print(f"Error uploading GLTF: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+async def _upload_via_web_server(gltf_path: str, model_id: str, build_filename: Optional[str] = None, build_size: Optional[int] = None, build_hash: Optional[str] = None) -> Optional[str]:
+    """
+    Upload GLTF file via web server (for files <= 2MB)
+    Returns the viewer URL if successful, None otherwise
+    """
+    try:
+        import os
         file_size = os.path.getsize(gltf_path)
         
         # Use async file reading for better concurrency
@@ -68,26 +111,51 @@ async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: O
         # Get active server URL (with fallback)
         server_url = await get_active_server_url()
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{server_url}/api/upload",
-                files=files,
-                data=data,
-                headers=headers
-            )
-            response.raise_for_status()
-            result = response.json()
-            # Clear data from memory
-            del gltf_data
-            
-            viewer_url = result.get('url')
-            
-            # Preview will be generated client-side by viewer.js
-            # No server-side generation needed
-            
-            return viewer_url
+        # Increase timeout for larger files
+        timeout = 120.0 if file_size > 10 * 1024 * 1024 else 60.0
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(
+                    f"{server_url}/api/upload",
+                    files=files,
+                    data=data,
+                    headers=headers
+                )
+                response.raise_for_status()
+                result = response.json()
+                # Clear data from memory
+                del gltf_data
+                
+                viewer_url = result.get('url')
+                
+                # Preview will be generated client-side by viewer.js
+                # No server-side generation needed
+                
+                return viewer_url
+            except httpx.HTTPStatusError as e:
+                # If we get a 413 (Payload Too Large) or 502/503 (Web Server Unavailable)
+                # try fallback
+                if e.response.status_code in (413, 502, 503):
+                    print(f"Primary server rejected upload (status {e.response.status_code}), trying Vercel fallback")
+                    server_url = WEB_SERVER_URL_FALLBACK
+                    # Retry with fallback
+                    response = await client.post(
+                        f"{server_url}/api/upload",
+                        files=files,
+                        data=data,
+                        headers=headers
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    del gltf_data
+                    return result.get('url')
+                else:
+                    raise
     except Exception as e:
         print(f"Error uploading GLTF: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -251,4 +319,106 @@ async def delete_model_from_backend(model_id: str) -> bool:
     except Exception as e:
         print(f"Error deleting model: {e}")
     return False
+
+async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[str]:
+    """
+    Upload GLTF file directly to R2 from the bot (bypasses web server file size limits)
+    Returns the public R2 URL if successful, None otherwise
+    Supports files up to 100MB (R2 free tier limit is much higher)
+    """
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        import os
+        
+        file_size = os.path.getsize(gltf_path)
+        print(f"Uploading {model_id}.gltf directly to R2 (size: {file_size / 1024 / 1024:.1f}MB)")
+        
+        # Run boto3 operations in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        def _upload_to_r2():
+            # Create S3 client for R2
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=R2_ENDPOINT_URL,
+                aws_access_key_id=R2_ACCESS_KEY_ID,
+                aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+                region_name='auto'
+            )
+            
+            key = f"{model_id}.gltf"
+            
+            # Upload file using streaming to avoid loading entire file into memory
+            with open(gltf_path, 'rb') as file_obj:
+                s3_client.upload_fileobj(
+                    file_obj,
+                    R2_BUCKET_NAME,
+                    key,
+                    ExtraArgs={
+                        'ContentType': 'model/gltf+json',
+                        'CacheControl': 'public, max-age=31536000'  # 1 year cache
+                    }
+                )
+            
+            return f"{R2_PUBLIC_URL}/{key}"
+        
+        # Run upload in executor
+        public_url = await loop.run_in_executor(None, _upload_to_r2)
+        print(f"Successfully uploaded {model_id}.gltf directly to R2: {public_url}")
+        return public_url
+        
+    except ClientError as e:
+        print(f"R2 direct upload error: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error uploading directly to R2: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+async def register_model_with_r2_url(model_id: str, r2_url: str, build_filename: Optional[str] = None, build_size: Optional[int] = None, build_hash: Optional[str] = None, preview_url: Optional[str] = None) -> Optional[str]:
+    """
+    Register a model with the backend using an R2 URL (file already uploaded to R2)
+    Returns the viewer URL if successful, None otherwise
+    """
+    try:
+        server_url = await get_active_server_url()
+        
+        data = {
+            'model_id': model_id,
+            'r2_url': r2_url,
+            'expires_in': 600  # 10 minutes
+        }
+        
+        # Add build file metadata for caching
+        if build_filename and build_size:
+            data['build_filename'] = build_filename
+            data['build_size'] = str(build_size)
+        if build_hash:
+            data['build_hash'] = build_hash
+        if preview_url:
+            data['preview_url'] = preview_url
+        
+        headers = {
+            'X-API-Secret': WEB_SERVER_SECRET
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{server_url}/api/register",
+                json=data,
+                headers=headers
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            viewer_url = result.get('url')
+            return viewer_url
+            
+    except Exception as e:
+        print(f"Error registering model with R2 URL: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 

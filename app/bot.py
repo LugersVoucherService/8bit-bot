@@ -105,7 +105,16 @@ async def render_command(
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    await interaction.response.defer()
+    # Send immediate response to show the bot is working
+    preparing_embed = discord.Embed(
+        title="Preparing Your Render",
+        description="Processing your build file... This may take a moment.",
+        color=0x5865F2
+    )
+    await interaction.response.send_message(embed=preparing_embed)
+    
+    # Get the message we just sent so we can edit it later
+    preparing_message = await interaction.original_response()
     
     # If index is provided, render from cache
     if index is not None:
@@ -117,7 +126,7 @@ async def render_command(
                     description="Unable to retrieve cached builds. Make sure the backend server is running.",
                     color=0xED4245
                 )
-                await interaction.followup.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             builds = builds_data.get('builds', [])
@@ -129,7 +138,7 @@ async def render_command(
                     description="No cached builds found. Please upload a build file instead.",
                     color=0xED4245
                 )
-                await interaction.followup.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Convert 1-based index to 0-based
@@ -139,7 +148,7 @@ async def render_command(
                     description=f"Index must be between 1 and {total_builds}. Use `/builds` to see available builds.",
                     color=0xED4245
                 )
-                await interaction.followup.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Get the build at the specified index (1-based to 0-based conversion)
@@ -152,7 +161,7 @@ async def render_command(
                     description="Invalid build data. The cached build may be corrupted.",
                     color=0xED4245
                 )
-                await interaction.followup.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Get viewer URL from model_id
@@ -177,7 +186,7 @@ async def render_command(
                 text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
             
-            await interaction.followup.send(embed=embed)
+            await preparing_message.edit(embed=embed)
             return
             
         except Exception as e:
@@ -186,7 +195,7 @@ async def render_command(
                 description=f"An error occurred while loading cached build: {str(e)}",
                 color=0xED4245
             )
-            await interaction.followup.send(embed=embed)
+            await preparing_message.edit(embed=embed)
             return
     
     # If no index and no file, show error
@@ -196,7 +205,7 @@ async def render_command(
             description="Please provide either a build file attachment or an index number from `/builds`.",
             color=0xED4245
         )
-        await interaction.followup.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         return
     
     # Original file upload logic
@@ -206,16 +215,16 @@ async def render_command(
             description="Please upload a .Build or .build file.",
             color=0xED4245
         )
-        await interaction.followup.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         return
     
     if build_file.size > MAX_BUILD_FILE_SIZE:
         embed = discord.Embed(
             title="File Too Large",
-            description=f"File size ({build_file.size / 1024 / 1024:.1f}MB) exceeds limit (5MB).\nPlease use a smaller build file.",
+            description=f"File size ({build_file.size / 1024 / 1024:.1f}MB) exceeds limit ({MAX_BUILD_FILE_SIZE / 1024 / 1024:.0f}MB).\nPlease use a smaller build file.",
             color=0xED4245
         )
-        await interaction.followup.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         return
     
     try:
@@ -267,7 +276,7 @@ async def render_command(
                             description="No blocks found in build file.",
                             color=0xED4245
                         )
-                        await interaction.followup.send(embed=embed)
+                        await preparing_message.edit(embed=embed)
                         cleanup_temp_files(build_path)
                         return
 
@@ -320,7 +329,7 @@ async def render_command(
                         description="No blocks found in build file.",
                         color=0xED4245
                     )
-                    await interaction.followup.send(embed=embed)
+                    await preparing_message.edit(embed=embed)
                     cleanup_temp_files(build_path)
                     return
 
@@ -370,7 +379,7 @@ async def render_command(
                     description="The web server is currently unavailable. Please try again later.",
                     color=0xED4245
                 )
-                await interaction.followup.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 cleanup_temp_files(build_path)
                 cleanup_temp_files(gltf_dir)
                 force_garbage_collection()
@@ -412,9 +421,10 @@ async def render_command(
                 text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
 
-        message = await interaction.followup.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         
         # Store message info for later update (if preview not ready)
+        message = preparing_message
         if not preview_url:
             # Poll for preview every second for up to 60 seconds
             async def poll_for_preview():
@@ -493,7 +503,7 @@ async def render_command(
             description=f"An error occurred while rendering: {str(e)}",
             color=0xED4245
         )
-        await interaction.followup.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         print(f"Render error: {e}")
         import traceback
         traceback.print_exc()
@@ -1106,9 +1116,16 @@ async def render_prefix(ctx, index: int = None):
         await ctx.send(embed=embed)
         return
     
+    # Send immediate response to show the bot is working
+    preparing_embed = discord.Embed(
+        title="Preparing Your Render",
+        description="Processing your build file... This may take a moment.",
+        color=0x5865F2
+    )
+    preparing_message = await ctx.send(embed=preparing_embed)
+    
     # If index is provided, render from cache
     if index is not None:
-        await ctx.typing()
         try:
             builds_data = await get_cached_builds()
             if not builds_data:
@@ -1117,7 +1134,7 @@ async def render_prefix(ctx, index: int = None):
                     description="Unable to retrieve cached builds. Make sure the backend server is running.",
                     color=0xED4245
                 )
-                await ctx.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             builds = builds_data.get('builds', [])
@@ -1129,7 +1146,7 @@ async def render_prefix(ctx, index: int = None):
                     description="No cached builds found. Please upload a build file instead.",
                     color=0xED4245
                 )
-                await ctx.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Convert 1-based index to 0-based
@@ -1139,7 +1156,7 @@ async def render_prefix(ctx, index: int = None):
                     description=f"Index must be between 1 and {total_builds}. Use `*builds` to see available builds.",
                     color=0xED4245
                 )
-                await ctx.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Get the build at the specified index (1-based to 0-based conversion)
@@ -1152,7 +1169,7 @@ async def render_prefix(ctx, index: int = None):
                     description="Invalid build data. The cached build may be corrupted.",
                     color=0xED4245
                 )
-                await ctx.send(embed=embed)
+                await preparing_message.edit(embed=embed)
                 return
             
             # Get viewer URL from model_id
@@ -1177,7 +1194,7 @@ async def render_prefix(ctx, index: int = None):
                 text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
             
-            await ctx.send(embed=embed)
+            await preparing_message.edit(embed=embed)
             return
             
         except Exception as e:
@@ -1186,7 +1203,7 @@ async def render_prefix(ctx, index: int = None):
                 description=f"An error occurred while loading cached build: {str(e)}",
                 color=0xED4245
             )
-            await ctx.send(embed=embed)
+            await preparing_message.edit(embed=embed)
             return
     
     # If no index, check for file attachment
@@ -1196,13 +1213,10 @@ async def render_prefix(ctx, index: int = None):
             description="Please provide either a build file attachment or an index number (e.g., `*render 5`). Use `*builds` to see available builds.",
             color=0xED4245
         )
-        await ctx.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         return
     
     build_file = ctx.message.attachments[0]
-    
-    # Defer response
-    await ctx.typing()
     
     if not build_file.filename.lower().endswith(('.build', '.Build')):
         embed = discord.Embed(
@@ -1216,7 +1230,7 @@ async def render_prefix(ctx, index: int = None):
     if build_file.size > MAX_BUILD_FILE_SIZE:
         embed = discord.Embed(
             title="File Too Large",
-            description=f"File size ({build_file.size / 1024 / 1024:.1f}MB) exceeds limit (5MB).",
+            description=f"File size ({build_file.size / 1024 / 1024:.1f}MB) exceeds limit ({MAX_BUILD_FILE_SIZE / 1024 / 1024:.0f}MB).",
             color=0xED4245
         )
         await ctx.send(embed=embed)
@@ -1270,7 +1284,7 @@ async def render_prefix(ctx, index: int = None):
                             description="No blocks found in build file.",
                             color=0xED4245
                         )
-                        await ctx.send(embed=embed)
+                        await preparing_message.edit(embed=embed)
                         cleanup_temp_files(build_path)
                         return
 
@@ -1323,7 +1337,7 @@ async def render_prefix(ctx, index: int = None):
                         description="No blocks found in build file.",
                         color=0xED4245
                     )
-                    await ctx.send(embed=embed)
+                    await preparing_message.edit(embed=embed)
                     cleanup_temp_files(build_path)
                     return
 
@@ -1368,7 +1382,7 @@ async def render_prefix(ctx, index: int = None):
                 description="The web server is currently unavailable. Please try again later.",
                 color=0xED4245
             )
-            await ctx.send(embed=embed)
+            await preparing_message.edit(embed=embed)
             return
         
         usage_stats = await get_usage_stats()
@@ -1416,9 +1430,10 @@ async def render_prefix(ctx, index: int = None):
                 text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
         
-        message = await ctx.send(embed=embed)
+        await preparing_message.edit(embed=embed)
         
         # Store message info for later update (if preview not ready)
+        message = preparing_message
         if not preview_url:
             # Poll for preview every second for up to 60 seconds
             async def poll_for_preview():
@@ -1497,7 +1512,10 @@ async def render_prefix(ctx, index: int = None):
             description=f"An error occurred while rendering: {str(e)}",
             color=0xED4245
         )
-        await ctx.send(embed=embed)
+        try:
+            await preparing_message.edit(embed=embed)
+        except:
+            await ctx.send(embed=embed)
         print(f"Render error: {e}")
         import traceback
         traceback.print_exc()
