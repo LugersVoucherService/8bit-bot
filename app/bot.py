@@ -15,8 +15,11 @@ import random
 from datetime import datetime, timedelta
 import httpx
 import re
+import requests
+import base64
 from urllib.parse import urlparse, parse_qs, unquote
 from io import BytesIO
+
 
 app_dir = os.path.dirname(os.path.abspath(__file__))
 if app_dir not in sys.path:
@@ -59,13 +62,42 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="*", intents=intents)
 tree = bot.tree  # Use the bot's built-in tree
 
-# Track if commands are already registered to prevent duplicates
 _commands_registered = False
-
-# Track bot start time for uptime
 _bot_start_time = None
 
-# Permission helper functions
+def generate_preview(model_id: str, gltf_url: str):
+    try:
+        flowkit_url = f"https://www.flowkit.app/s/demo/r/rh:-45,rv:15,s:512/u/{gltf_url}"
+        print(f"[Flowkit] Fetching {flowkit_url}")
+        resp = requests.get(flowkit_url, timeout=60)
+        resp.raise_for_status()
+
+        if resp.headers.get("Content-Type", "").startswith("image/"):
+            img_data = resp.content
+        else:
+            match = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", resp.text)
+            if not match:
+                print("No base64 image in Flowkit response.")
+                return None
+            img_data = base64.b64decode(match.group(1))
+
+        files = {"preview": (f"{model_id}_preview.png", img_data, "image/png")}
+        data = {"model_id": model_id}
+        headers = {"X-API-Secret": API_KEY}
+        r = requests.post(f"{API_BASE_URL}/api/upload-preview", files=files, data=data, headers=headers)
+
+        if r.ok:
+            url = r.json().get("preview_url")
+            print(f"✅ Uploaded preview to R2: {url}")
+            return url
+        else:
+            print(f"Upload failed: {r.status_code} {r.text}")
+            return None
+
+    except Exception as e:
+        print(f"❌ Flowkit generation failed: {e}")
+        return None
+
 def has_member_access(user) -> bool:
     """Check if user has member-level access (owner or staff role)"""
     if user.id == OWNER_ID:
@@ -141,7 +173,6 @@ async def render_command(
     build_file: discord.Attachment = None,
     index: int = None
 ):
-    """Render a build file to 3D or render a cached build by index"""
     if not has_member_access(interaction.user):
         embed = discord.Embed(
             title="Access Denied",
@@ -350,7 +381,8 @@ async def render_command(
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
-                    else:
+                    else: #1
+                        # Upload (low-memory path)
                         viewer_url = await upload_gltf_to_server(
                             str(gltf_path),
                             model_id,
@@ -403,7 +435,8 @@ async def render_command(
                     print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
-                else:
+                else: #2
+                    # Upload (low-memory path)
                     viewer_url = await upload_gltf_to_server(
                         str(gltf_path),
                         model_id,
@@ -413,7 +446,6 @@ async def render_command(
                     )
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
-
         if not viewer_url:
             server_available = await check_web_server_health()
             if server_available:
@@ -510,7 +542,7 @@ async def render_command(
                             except Exception as e:
                                 print(f"[Bot] Error updating cache with preview: {e}")
                             
-                            print(f"[Bot] ✅ Preview generated for {model_id}: {generated_preview_url}")
+                            print(f"[Bot] Preview generated for {model_id}: {generated_preview_url}")
                             
                             # Update embed with preview
                             new_embed = discord.Embed(
@@ -1380,7 +1412,7 @@ async def render_prefix(ctx, index: int = None):
                         print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
-                    else:
+                    else: #3
                         viewer_url = await upload_gltf_to_server(
                             str(gltf_path),
                             model_id,
@@ -1433,7 +1465,7 @@ async def render_prefix(ctx, index: int = None):
                     print(f"Cache hit before upload: {build_file.filename} ({build_file.size} bytes) -> {model_id} (skipped R2 upload)")
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
-                else:
+                else: #4
                     viewer_url = await upload_gltf_to_server(
                         str(gltf_path),
                         model_id,
@@ -1532,7 +1564,7 @@ async def render_prefix(ctx, index: int = None):
                             except Exception as e:
                                 print(f"[Bot] Error updating cache with preview: {e}")
                             
-                            print(f"[Bot] ✅ Preview generated for {model_id}: {generated_preview_url}")
+                            print(f"[Bot] Preview generated for {model_id}: {generated_preview_url}")
                             
                             # Update embed with preview
                             new_embed = discord.Embed(
@@ -2049,8 +2081,6 @@ async def image2link_prefix(ctx):
     
     await ctx.send(embed=embed)
 
-# ==================== MISC/FUN COMMANDS ====================
-
 @tree.command(name="random", description="Generate a random number", guild=discord.Object(id=ALLOWED_GUILD_ID))
 @app_commands.describe(
     min_value="Minimum value (default: 1)",
@@ -2223,7 +2253,6 @@ async def choose_command(interaction: discord.Interaction, options: str):
     
     await interaction.response.send_message(embed=embed)
 
-# Prefix versions of misc commands
 @bot.command(name="random", aliases=["rand", "rng"])
 @commands.cooldown(3, 5.0, commands.BucketType.user)  # 3 uses per 5 seconds
 async def random_prefix(ctx, min_value: int = 1, max_value: int = 100):
@@ -2628,26 +2657,19 @@ async def systeminfo_command(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def extract_image_url(url: str) -> str:
-    """Extract actual image URL from redirect URLs (like Google image search)"""
     try:
         parsed = urlparse(url)
         query_params = parse_qs(parsed.query)
         
-        # Handle Google image search redirects (google.com/url?sa=i&url=...)
         if 'google.com/url' in url:
             if 'url' in query_params:
                 actual_url = unquote(query_params['url'][0])
                 return actual_url
         
-        # Handle Google image proxy (encrypted-tbn0.gstatic.com)
-        # These are already direct image URLs, just return as-is
         if 'gstatic.com' in url or 'googleusercontent.com' in url:
             return url
         
-        # Handle other redirect patterns
-        # Some URLs have the actual URL in query parameters
         if 'url=' in url:
-            # Try to extract from various query parameter names
             for param_name in ['url', 'image', 'src', 'link']:
                 if param_name in query_params:
                     potential_url = unquote(query_params[param_name][0])
@@ -2659,9 +2681,7 @@ async def extract_image_url(url: str) -> str:
         return url
 
 async def download_image_from_url(url: str) -> tuple[BytesIO, str]:
-    """Download image from URL and return BytesIO and content type"""
     try:
-        # Extract actual URL if it's a redirect
         actual_url = await extract_image_url(url)
         
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -2673,16 +2693,13 @@ async def download_image_from_url(url: str) -> tuple[BytesIO, str]:
             })
             response.raise_for_status()
             
-            # Validate content length
             if len(response.content) == 0:
                 raise ValueError("Downloaded image is empty")
             
-            # Check if it's an image by content
             content = response.content
             is_image = False
             content_type = response.headers.get('content-type', '').split(';')[0].strip()
             
-            # Detect image format from magic bytes
             if content[:4] == b'\x89PNG':
                 is_image = True
                 content_type = 'image/png'
@@ -2698,7 +2715,6 @@ async def download_image_from_url(url: str) -> tuple[BytesIO, str]:
             elif content_type.startswith('image/'):
                 is_image = True
             else:
-                # Try to detect from content-type header
                 if content_type.startswith('image/'):
                     is_image = True
                 else:
@@ -2707,7 +2723,6 @@ async def download_image_from_url(url: str) -> tuple[BytesIO, str]:
             if not is_image:
                 raise ValueError("URL does not point to a valid image")
             
-            # Create BytesIO and reset position
             image_data = BytesIO(content)
             image_data.seek(0)  # Reset to beginning
             
@@ -2796,7 +2811,6 @@ async def image2link_command(interaction: discord.Interaction, image: discord.At
     
     await interaction.followup.send(embed=embed)
 
-# Cooldown error handler for slash commands (must be after all commands are defined)
 @render_command.error
 @random_command.error
 @flip_command.error
@@ -2934,9 +2948,7 @@ async def on_ready():
         traceback.print_exc()
 
 def main():
-    """Main entry point for the bot"""
     if not DISCORD_BOT_TOKEN:
-        print("Error: DISCORD_BOT_TOKEN environment variable not set!")
         exit(1)
     
     bot.run(DISCORD_BOT_TOKEN)

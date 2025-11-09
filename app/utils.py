@@ -160,10 +160,6 @@ async def _upload_via_web_server(gltf_path: str, model_id: str, build_filename: 
         traceback.print_exc()
         return None
 
-
-# Preview generation is now handled client-side by viewer.js
-# No server-side preview generation needed
-
 async def check_web_server_health(server_url: Optional[str] = None) -> bool:
     """Check if the web server is available"""
     url = server_url or WEB_SERVER_URL_PRIMARY
