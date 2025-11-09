@@ -11,7 +11,14 @@ WEB_SERVER_URL = os.getenv("WEB_SERVER_URL", WEB_SERVER_URL_PRIMARY).strip()
 if WEB_SERVER_URL != WEB_SERVER_URL_PRIMARY:
     WEB_SERVER_URL_PRIMARY = WEB_SERVER_URL
 
-MAX_BUILD_FILE_SIZE = 5 * 1024 * 1024
+MAX_BUILD_FILE_SIZE = 30 * 1024 * 1024  # 30MB - maximum build file size for Discord uploads
+
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
+R2_ENDPOINT_URL = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
 import tempfile
 TEMP_DIR = Path(tempfile.gettempdir()) / "8bit_bot"
