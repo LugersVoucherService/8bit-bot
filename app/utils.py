@@ -8,6 +8,8 @@ import aiofiles
 from pathlib import Path
 from typing import Optional
 import httpx
+import base64
+import re
 
 try:
     from config import (
@@ -322,24 +324,23 @@ async def delete_model_from_backend(model_id: str) -> bool:
 
 async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[str]:
     """
-    Upload GLTF file directly to R2 (bypasses web server file size limits)
+    Upload GLTF file directly to R2 from the bot (bypasses web server file size limits)
     Returns the public R2 URL if successful, None otherwise
+    Supports files up to 100MB (R2 free tier limit is much higher)
     """
     try:
+        import boto3
+        from botocore.exceptions import ClientError
         import os
-        try:
-            import boto3
-            from botocore.exceptions import ClientError
-        except ModuleNotFoundError:
-            print("boto3 not installed; cannot upload directly to R2.")
-            return None
-
+        
         file_size = os.path.getsize(gltf_path)
         print(f"Uploading {model_id}.gltf directly to R2 (size: {file_size / 1024 / 1024:.1f}MB)")
-
+        
+        # Run boto3 operations in executor to avoid blocking
         loop = asyncio.get_event_loop()
-
+        
         def _upload_to_r2():
+            # Create S3 client for R2
             s3_client = boto3.client(
                 's3',
                 endpoint_url=R2_ENDPOINT_URL,
@@ -347,8 +348,10 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
                 aws_secret_access_key=R2_SECRET_ACCESS_KEY,
                 region_name='auto'
             )
-
+            
             key = f"{model_id}.gltf"
+            
+            # Upload file using streaming to avoid loading entire file into memory
             with open(gltf_path, 'rb') as file_obj:
                 s3_client.upload_fileobj(
                     file_obj,
@@ -356,16 +359,17 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
                     key,
                     ExtraArgs={
                         'ContentType': 'model/gltf+json',
-                        'CacheControl': 'public, max-age=31536000'
+                        'CacheControl': 'public, max-age=31536000'  # 1 year cache
                     }
                 )
-
+            
             return f"{R2_PUBLIC_URL}/{key}"
-
+        
+        # Run upload in executor
         public_url = await loop.run_in_executor(None, _upload_to_r2)
         print(f"Successfully uploaded {model_id}.gltf directly to R2: {public_url}")
         return public_url
-
+        
     except ClientError as e:
         print(f"R2 direct upload error: {e}")
         return None
@@ -374,7 +378,6 @@ async def upload_gltf_direct_to_r2(gltf_path: str, model_id: str) -> Optional[st
         import traceback
         traceback.print_exc()
         return None
-
 
 async def register_model_with_r2_url(model_id: str, r2_url: str, build_filename: Optional[str] = None, build_size: Optional[int] = None, build_hash: Optional[str] = None, preview_url: Optional[str] = None) -> Optional[str]:
     """
@@ -421,4 +424,132 @@ async def register_model_with_r2_url(model_id: str, r2_url: str, build_filename:
         traceback.print_exc()
         return None
 
+async def generate_preview_with_flowkit(model_id: str, gltf_url: str) -> Optional[str]:
+    """
+    Generate preview using Flowkit API and upload to R2
+    Returns preview URL if successful, None otherwise
+    Based on test_cframe.py logic
+    """
+    try:
+        # Flowkit snapshot endpoint with parameters:
+        #   rh = horizontal rotation (-45)
+        #   rv = vertical rotation (15)
+        #   s  = size (512)
+        #   sh = shadows (false = disable)
+        #   bg = background color in hex (000000 = black)
+        flowkit_url = f"https://www.flowkit.app/s/demo/r/rh:145,rv:30,s:512/u/{gltf_url}"
+        
+        print(f"[Preview] Generating preview for {model_id} using Flowkit: {flowkit_url}")
+        
+        # Fetch preview from Flowkit
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(flowkit_url)
+            response.raise_for_status()
+            
+            # Extract image data
+            img_data = None
+            content_type = response.headers.get("Content-Type", "")
+            if content_type.startswith("image/"):
+                img_data = response.content
+            else:
+                text = response.text
+                if "data:image/png;base64," in text:
+                    b64data = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", text).group(1)
+                    img_data = base64.b64decode(b64data)
+                else:
+                    raise ValueError("Unexpected response type from Flowkit")
+            
+            if not img_data:
+                raise ValueError("Failed to extract image data from Flowkit response")
+            
+            print(f"[Preview] Preview generated, size: {len(img_data)} bytes")
+            
+            # Upload preview to R2
+            preview_url = await upload_preview_to_r2(model_id, img_data)
+            return preview_url
+            
+    except httpx.RequestError as e:
+        print(f"[Preview] Flowkit request error for {model_id}: {e}")
+        return None
+    except Exception as e:
+        print(f"[Preview] Error generating preview for {model_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+async def upload_preview_to_r2(model_id: str, img_data: bytes) -> Optional[str]:
+    """
+    Upload preview image to R2
+    Returns preview URL if successful, None otherwise
+    """
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        from io import BytesIO
+        
+        print(f"Uploading preview for {model_id} to R2 (size: {len(img_data)} bytes)")
+        
+        # Run boto3 operations in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        def _upload_preview():
+            # Create S3 client for R2
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=R2_ENDPOINT_URL,
+                aws_access_key_id=R2_ACCESS_KEY_ID,
+                aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+                region_name='auto'
+            )
+            
+            preview_key = f"{model_id}_preview.png"
+            
+            # Upload preview using BytesIO
+            img_buffer = BytesIO(img_data)
+            s3_client.upload_fileobj(
+                img_buffer,
+                R2_BUCKET_NAME,
+                preview_key,
+                ExtraArgs={
+                    'ContentType': 'image/png',
+                    'CacheControl': 'public, max-age=31536000'  # 1 year cache
+                }
+            )
+            
+            return f"{R2_PUBLIC_URL}/{preview_key}"
+        
+        # Run upload in executor
+        preview_url = await loop.run_in_executor(None, _upload_preview)
+        print(f"Successfully uploaded preview for {model_id} to R2: {preview_url}")
+        return preview_url
+        
+    except ClientError as e:
+        print(f"R2 preview upload error: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error uploading preview to R2: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+async def check_preview_ready(gltf_url: str) -> bool:
+    """
+    Check if Flowkit preview is ready by attempting to fetch it
+    Returns True if preview is ready, False otherwise
+    """
+    try:
+        flowkit_url = f"https://www.flowkit.app/s/demo/r/rh:-45,rv:15,s:512,sh:false,bg:000000/u/{gltf_url}"
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(flowkit_url)
+            if response.status_code == 200:
+                content_type = response.headers.get("Content-Type", "")
+                if content_type.startswith("image/"):
+                    return True
+                text = response.text
+                if "data:image/png;base64," in text:
+                    return True
+        return False
+    except:
+        return False
 

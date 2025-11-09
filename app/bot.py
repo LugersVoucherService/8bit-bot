@@ -26,6 +26,7 @@ from config import (
     DISCORD_BOT_TOKEN,
     WEB_SERVER_URL_PRIMARY,
     WEB_SERVER_URL_FALLBACK,
+    WEB_SERVER_SECRET,
     TEMP_DIR,
     MAX_BUILD_FILE_SIZE
 )
@@ -35,6 +36,7 @@ ALLOWED_GUILD_ID = 1434376307734745092
 OWNER_ID = 1149910630678134916
 STAFF_ROLE_ID = 1436606654924984370  # 8Bit Staff
 DEV_ROLE_ID = 1434956294984437942  # Developer role
+COOLDOWN_EXEMPT_ROLE_ID = 1436840291079557270  # Role immune to cooldowns
 
 from utils import (
     generate_model_id,
@@ -84,12 +86,56 @@ def has_dev_access(user) -> bool:
             return any(role.id == DEV_ROLE_ID for role in user.roles)
     return False
 
+def is_cooldown_exempt(user) -> bool:
+    """Check if user is exempt from cooldowns"""
+    if user.id == OWNER_ID:
+        return True
+    # Check if user has the cooldown exempt role
+    if isinstance(user, discord.Member):
+        if user.guild and user.guild.id == ALLOWED_GUILD_ID:
+            return any(role.id == COOLDOWN_EXEMPT_ROLE_ID for role in user.roles)
+    return False
+
+# Store cooldowns per command
+_cooldown_storage = {}
+
+def cooldown_with_exemption(rate: int, per: float, key=None):
+    """
+    Custom cooldown check that exempts certain users
+    """
+    # Create a unique identifier for this cooldown
+    cooldown_id = f"{rate}_{per}_{id(key) if key else 'default'}"
+    
+    async def predicate(interaction: discord.Interaction):
+        # Check if user is exempt
+        if is_cooldown_exempt(interaction.user):
+            return True  # Exempt users bypass cooldown
+        
+        # Get or create cooldown for this command
+        if cooldown_id not in _cooldown_storage:
+            _cooldown_storage[cooldown_id] = app_commands.Cooldown(rate, per)
+        
+        check = _cooldown_storage[cooldown_id]
+        
+        # Apply normal cooldown check
+        if key is None:
+            check_key = (interaction.guild_id, interaction.user.id)
+        else:
+            check_key = key(interaction)
+        
+        retry_after = check.update_rate_limit(check_key)
+        if retry_after:
+            raise app_commands.CommandOnCooldown(check, retry_after)
+        return True
+    
+    return app_commands.check(predicate)
+
 @tree.command(name="render", description="Render a build file to 3D and get a temporary viewer link", guild=discord.Object(id=ALLOWED_GUILD_ID))
 @app_commands.describe(
     build_file="Build file (.Build or .build) to render (optional if using index)",
     index="Index of cached build from /builds (optional if uploading file)"
 )
-@app_commands.checks.cooldown(1, 30.0, key=lambda i: (i.guild_id, i.user.id))  # 30 second cooldown per user
+@cooldown_with_exemption(1, 30.0, key=lambda i: (i.guild_id, i.user.id))  # 30 second cooldown per user (exempt role bypasses)
 async def render_command(
     interaction: discord.Interaction,
     build_file: discord.Attachment = None,
@@ -107,8 +153,8 @@ async def render_command(
     
     # Send immediate response to show the bot is working
     preparing_embed = discord.Embed(
-        title="Preparing Your Render",
-        description="Processing your build file... This may take a moment.",
+        title="Rendering Your Build",
+        description="Rendering your build, this may take a while.",
         color=0x5865F2
     )
     await interaction.response.send_message(embed=preparing_embed)
@@ -393,10 +439,7 @@ async def render_command(
         if cached:
             preview_url = cached.get('preview_url')
         
-        # Construct preview placeholder URL (will be updated when preview is ready)
-        server_url = await get_active_server_url()
-        preview_placeholder_url = f"{server_url}/api/model/{model_id}/preview"
-        
+        # Create embed with viewer link first (preview will be added async)
         embed = discord.Embed(
             title="Build Rendered",
             description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
@@ -404,7 +447,7 @@ async def render_command(
             timestamp=datetime.now()
         )
         
-        # Add preview image (placeholder or actual if available)
+        # Add preview image if available from cache
         storage_pct = usage_stats.get('storage_percent', 0)
         a_class_pct = usage_stats.get('a_class_percent', 0)
         b_class_pct = usage_stats.get('b_class_percent', 0)
@@ -415,85 +458,103 @@ async def render_command(
                 text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
         else:
-            # Use placeholder - will be updated when preview is ready
-            embed.set_image(url=preview_placeholder_url)
             embed.set_footer(
                 text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
 
+        # Send embed with model link first
         await preparing_message.edit(embed=embed)
         
-        # Store message info for later update (if preview not ready)
-        message = preparing_message
+        # Generate preview asynchronously if not in cache
         if not preview_url:
-            # Poll for preview every second for up to 60 seconds
-            async def poll_for_preview():
-                max_attempts = 60  # 60 seconds
-                attempt = 0
-                
-                while attempt < max_attempts:
-                    await asyncio.sleep(1)  # Wait 1 second between checks
-                    attempt += 1
-                    
-                    try:
-                        # Check if preview is ready
-                        from utils import get_active_server_url
-                        server_url = await get_active_server_url()
-                        async with httpx.AsyncClient(timeout=5.0) as client:
-                            response = await client.get(f"{server_url}/api/model/{model_id}/info")
-                            if response.status_code == 200:
-                                data = response.json()
-                                preview_url_found = data.get('preview_url')
-                                
-                                if preview_url_found:
-                                    # Update embed with preview
-                                    print(f"[Bot] Preview found for {model_id} after {attempt} seconds: {preview_url_found}")
-                                    new_embed = discord.Embed(
-                                        title="Build Rendered",
-                                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
-                                        color=0x5865F2,
-                                        timestamp=datetime.now()
-                                    )
-                                    new_embed.set_image(url=preview_url_found)
-                                    storage_pct = usage_stats.get('storage_percent', 0)
-                                    a_class_pct = usage_stats.get('a_class_percent', 0)
-                                    b_class_pct = usage_stats.get('b_class_percent', 0)
-                                    new_embed.set_footer(
-                                        text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-                                    )
-                                    await message.edit(embed=new_embed)
-                                    print(f"[Bot] ✅ Updated embed with preview for {model_id}")
-                                    return  # Success - stop polling
-                                else:
-                                    print(f"[Bot] Preview not ready for {model_id} (attempt {attempt}/{max_attempts})")
-                            else:
-                                print(f"[Bot] Error checking preview for {model_id}: HTTP {response.status_code}")
-                    except Exception as e:
-                        print(f"[Bot] Error checking preview for {model_id} (attempt {attempt}): {e}")
-                
-                # If we get here, preview wasn't found after 60 seconds
-                print(f"[Bot] ⚠️ Preview not found for {model_id} after {max_attempts} seconds")
+            async def generate_and_update_preview():
                 try:
-                    # Update embed to show "No Preview Available"
-                    new_embed = discord.Embed(
-                        title="Build Rendered",
-                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
-                        color=0x5865F2,
-                        timestamp=datetime.now()
-                    )
-                    storage_pct = usage_stats.get('storage_percent', 0)
-                    a_class_pct = usage_stats.get('a_class_percent', 0)
-                    b_class_pct = usage_stats.get('b_class_percent', 0)
-                    new_embed.set_footer(
-                        text=f"No Preview Available | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-                    )
-                    await message.edit(embed=new_embed)
+                    # Construct R2 URL for the GLTF file
+                    from config import R2_PUBLIC_URL
+                    gltf_url = f"{R2_PUBLIC_URL}/{model_id}.gltf"
+                    
+                    # Check if preview is ready from Flowkit (Flowkit caches renders, so this is fast)
+                    from utils import check_preview_ready, generate_preview_with_flowkit
+                    
+                    # Wait a bit for Flowkit to process if needed, then check
+                    max_attempts = 10
+                    attempt = 0
+                    preview_ready = False
+                    
+                    while attempt < max_attempts and not preview_ready:
+                        await asyncio.sleep(1)  # Wait 1 second between checks
+                        preview_ready = await check_preview_ready(gltf_url)
+                        attempt += 1
+                    
+                    if preview_ready:
+                        # Generate and upload preview (Flowkit will use its cache if available)
+                        print(f"[Bot] Generating preview for {model_id}...")
+                        generated_preview_url = await generate_preview_with_flowkit(model_id, gltf_url)
+                        
+                        if generated_preview_url:
+                            # Update cache with preview URL via API
+                            try:
+                                server_url = await get_active_server_url()
+                                async with httpx.AsyncClient(timeout=10.0) as client:
+                                    response = await client.post(
+                                        f"{server_url}/api/generate-preview",
+                                        json={
+                                            'model_id': model_id,
+                                            'gltf_url': gltf_url
+                                        },
+                                        headers={
+                                            'X-API-Secret': WEB_SERVER_SECRET,
+                                            'Content-Type': 'application/json'
+                                        }
+                                    )
+                            except Exception as e:
+                                print(f"[Bot] Error updating cache with preview: {e}")
+                            
+                            print(f"[Bot] ✅ Preview generated for {model_id}: {generated_preview_url}")
+                            
+                            # Update embed with preview
+                            new_embed = discord.Embed(
+                                title="Build Rendered",
+                                description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                color=0x5865F2,
+                                timestamp=datetime.now()
+                            )
+                            new_embed.set_image(url=generated_preview_url)
+                            new_embed.set_footer(
+                                text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                            )
+                            await preparing_message.edit(embed=new_embed)
+                        else:
+                            # Preview generation failed, update footer
+                            new_embed = discord.Embed(
+                                title="Build Rendered",
+                                description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                color=0x5865F2,
+                                timestamp=datetime.now()
+                            )
+                            new_embed.set_footer(
+                                text=f"Preview unavailable | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                            )
+                            await preparing_message.edit(embed=new_embed)
+                    else:
+                        # Preview not ready after max attempts
+                        new_embed = discord.Embed(
+                            title="Build Rendered",
+                            description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                            color=0x5865F2,
+                            timestamp=datetime.now()
+                        )
+                        new_embed.set_footer(
+                            text=f"Preview unavailable | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                        )
+                        await preparing_message.edit(embed=new_embed)
                 except Exception as e:
-                    print(f"[Bot] Error updating embed with 'No Preview Available': {e}")
+                    print(f"[Bot] Error in async preview generation: {e}")
+                    import traceback
+                    traceback.print_exc()
             
-            # Start polling for preview
-            print(f"[Bot] Starting preview polling for {model_id}")
-            asyncio.create_task(poll_for_preview())
+            # Start async preview generation
+            asyncio.create_task(generate_and_update_preview())
 
         force_garbage_collection()
         
@@ -514,6 +575,13 @@ async def render_command(
 async def on_command_error(ctx, error):
     """Handle command errors including cooldowns"""
     if isinstance(error, commands.CommandOnCooldown):
+        # Check if user is exempt from cooldowns
+        if is_cooldown_exempt(ctx.author):
+            # User is exempt, retry the command
+            ctx.command.reset_cooldown(ctx)
+            await ctx.reinvoke()
+            return
+        
         retry_after = error.retry_after
         embed = discord.Embed(
             title="⏱️ Cooldown Active",
@@ -1118,8 +1186,8 @@ async def render_prefix(ctx, index: int = None):
     
     # Send immediate response to show the bot is working
     preparing_embed = discord.Embed(
-        title="Preparing Your Render",
-        description="Processing your build file... This may take a moment.",
+        title="Rendering Your Build",
+        description="Rendering your build, this may take a while.",
         color=0x5865F2
     )
     preparing_message = await ctx.send(embed=preparing_embed)
@@ -1388,26 +1456,12 @@ async def render_prefix(ctx, index: int = None):
         usage_stats = await get_usage_stats()
         expiry_timestamp = int((datetime.now() + timedelta(minutes=10)).timestamp())
         
-        # Get preview URL if available (from cache or upload response)
+        # Get preview URL if available (from cache)
         preview_url = None
         if cached:
             preview_url = cached.get('preview_url')
-        else:
-            # Try to get preview from model info
-            try:
-                from utils import get_active_server_url
-                server_url = await get_active_server_url()
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get(f"{server_url}/api/model/{model_id}/info")
-                    if response.status_code == 200:
-                        data = response.json()
-                        preview_url = data.get('preview_url')
-            except Exception as e:
-                print(f"Error getting preview URL: {e}")
         
-        # Create embed with preview placeholder if no preview yet
-        preview_placeholder_url = "https://via.placeholder.com/512x512/1a1a1a/5865F2?text=Preview+Loading..."
-        
+        # Create embed with viewer link first (preview will be added async)
         embed = discord.Embed(
             title="Build Rendered",
             description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
@@ -1415,6 +1469,7 @@ async def render_prefix(ctx, index: int = None):
             timestamp=datetime.now()
         )
         
+        # Add preview image if available from cache
         storage_pct = usage_stats.get('storage_percent', 0)
         a_class_pct = usage_stats.get('a_class_percent', 0)
         b_class_pct = usage_stats.get('b_class_percent', 0)
@@ -1425,84 +1480,103 @@ async def render_prefix(ctx, index: int = None):
                 text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
         else:
-            embed.set_image(url=preview_placeholder_url)
             embed.set_footer(
                 text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
             )
-        
+
+        # Send embed with model link first
         await preparing_message.edit(embed=embed)
         
-        # Store message info for later update (if preview not ready)
-        message = preparing_message
+        # Generate preview asynchronously if not in cache
         if not preview_url:
-            # Poll for preview every second for up to 60 seconds
-            async def poll_for_preview():
-                max_attempts = 60  # 60 seconds
-                attempt = 0
-                
-                while attempt < max_attempts:
-                    await asyncio.sleep(1)  # Wait 1 second between checks
-                    attempt += 1
-                    
-                    try:
-                        # Check if preview is ready
-                        from utils import get_active_server_url
-                        server_url = await get_active_server_url()
-                        async with httpx.AsyncClient(timeout=5.0) as client:
-                            response = await client.get(f"{server_url}/api/model/{model_id}/info")
-                            if response.status_code == 200:
-                                data = response.json()
-                                preview_url_found = data.get('preview_url')
-                                
-                                if preview_url_found:
-                                    # Update embed with preview
-                                    print(f"[Bot] Preview found for {model_id} after {attempt} seconds: {preview_url_found}")
-                                    new_embed = discord.Embed(
-                                        title="Build Rendered",
-                                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
-                                        color=0x5865F2,
-                                        timestamp=datetime.now()
-                                    )
-                                    new_embed.set_image(url=preview_url_found)
-                                    storage_pct = usage_stats.get('storage_percent', 0)
-                                    a_class_pct = usage_stats.get('a_class_percent', 0)
-                                    b_class_pct = usage_stats.get('b_class_percent', 0)
-                                    new_embed.set_footer(
-                                        text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-                                    )
-                                    await message.edit(embed=new_embed)
-                                    print(f"[Bot] ✅ Updated embed with preview for {model_id}")
-                                    return  # Success - stop polling
-                                else:
-                                    print(f"[Bot] Preview not ready for {model_id} (attempt {attempt}/{max_attempts})")
-                            else:
-                                print(f"[Bot] Error checking preview for {model_id}: HTTP {response.status_code}")
-                    except Exception as e:
-                        print(f"[Bot] Error checking preview for {model_id} (attempt {attempt}): {e}")
-                
-                # If we get here, preview wasn't found after 60 seconds
-                print(f"[Bot] ⚠️ Preview not found for {model_id} after {max_attempts} seconds")
+            async def generate_and_update_preview():
                 try:
-                    # Update embed to show "No Preview Available"
-                    new_embed = discord.Embed(
-                        title="Build Rendered",
-                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
-                        color=0x5865F2,
-                        timestamp=datetime.now()
-                    )
-                    storage_pct = usage_stats.get('storage_percent', 0)
-                    a_class_pct = usage_stats.get('a_class_percent', 0)
-                    b_class_pct = usage_stats.get('b_class_percent', 0)
-                    new_embed.set_footer(
-                        text=f"No Preview Available | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-                    )
-                    await message.edit(embed=new_embed)
+                    # Construct R2 URL for the GLTF file
+                    from config import R2_PUBLIC_URL
+                    gltf_url = f"{R2_PUBLIC_URL}/{model_id}.gltf"
+                    
+                    # Check if preview is ready from Flowkit (Flowkit caches renders, so this is fast)
+                    from utils import check_preview_ready, generate_preview_with_flowkit
+                    
+                    # Wait a bit for Flowkit to process if needed, then check
+                    max_attempts = 10
+                    attempt = 0
+                    preview_ready = False
+                    
+                    while attempt < max_attempts and not preview_ready:
+                        await asyncio.sleep(1)  # Wait 1 second between checks
+                        preview_ready = await check_preview_ready(gltf_url)
+                        attempt += 1
+                    
+                    if preview_ready:
+                        # Generate and upload preview (Flowkit will use its cache if available)
+                        print(f"[Bot] Generating preview for {model_id}...")
+                        generated_preview_url = await generate_preview_with_flowkit(model_id, gltf_url)
+                        
+                        if generated_preview_url:
+                            # Update cache with preview URL via API
+                            try:
+                                server_url = await get_active_server_url()
+                                async with httpx.AsyncClient(timeout=10.0) as client:
+                                    response = await client.post(
+                                        f"{server_url}/api/generate-preview",
+                                        json={
+                                            'model_id': model_id,
+                                            'gltf_url': gltf_url
+                                        },
+                                        headers={
+                                            'X-API-Secret': WEB_SERVER_SECRET,
+                                            'Content-Type': 'application/json'
+                                        }
+                                    )
+                            except Exception as e:
+                                print(f"[Bot] Error updating cache with preview: {e}")
+                            
+                            print(f"[Bot] ✅ Preview generated for {model_id}: {generated_preview_url}")
+                            
+                            # Update embed with preview
+                            new_embed = discord.Embed(
+                                title="Build Rendered",
+                                description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                color=0x5865F2,
+                                timestamp=datetime.now()
+                            )
+                            new_embed.set_image(url=generated_preview_url)
+                            new_embed.set_footer(
+                                text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                            )
+                            await preparing_message.edit(embed=new_embed)
+                        else:
+                            # Preview generation failed, update footer
+                            new_embed = discord.Embed(
+                                title="Build Rendered",
+                                description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                color=0x5865F2,
+                                timestamp=datetime.now()
+                            )
+                            new_embed.set_footer(
+                                text=f"Preview unavailable | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                            )
+                            await preparing_message.edit(embed=new_embed)
+                    else:
+                        # Preview not ready after max attempts
+                        new_embed = discord.Embed(
+                            title="Build Rendered",
+                            description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                            color=0x5865F2,
+                            timestamp=datetime.now()
+                        )
+                        new_embed.set_footer(
+                            text=f"Preview unavailable | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                        )
+                        await preparing_message.edit(embed=new_embed)
                 except Exception as e:
-                    print(f"[Bot] Error updating embed with 'No Preview Available': {e}")
+                    print(f"[Bot] Error in async preview generation: {e}")
+                    import traceback
+                    traceback.print_exc()
             
-            # Start polling for preview
-            print(f"[Bot] Starting preview polling for {model_id}")
-            asyncio.create_task(poll_for_preview())
+            # Start async preview generation
+            asyncio.create_task(generate_and_update_preview())
         
         force_garbage_collection()
         
@@ -1787,6 +1861,62 @@ async def uptime_prefix(ctx):
     
     await ctx.send(embed=embed)
 
+@bot.command(name="credits", aliases=["credit", "about"])
+async def credits_prefix(ctx):
+    """Prefix version of /credits command"""
+    if ctx.guild.id != ALLOWED_GUILD_ID:
+        return
+    
+    await ctx.typing()
+    
+    # Try to get the creator user
+    creator_id = 1149910630678134916
+    creator_mention = f"<@{creator_id}>"
+    try:
+        creator_user = await bot.fetch_user(creator_id)
+        creator_mention = creator_user.mention
+        creator_name = creator_user.display_name
+    except:
+        creator_name = "_zenix"
+    
+    embed = discord.Embed(
+        title="8Bit | Credits",
+        description="**Thank you for using 8Bit.**",
+        color=0x5865F2,
+        timestamp=datetime.now()
+    )
+    
+    embed.add_field(
+        name="Bot Developer",
+        value=f"**{creator_name}**\n`{creator_id}`\n{creator_mention}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="API Developer",
+        value=f"**{creator_name}**\n`{creator_id}`\n{creator_mention}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="\u200b",
+        value="\u200b",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🛠️ Technologies & Services",
+        value="• **Flowkit** - 3D Model Preview Generation\n• **PythonAnywhere** - Backend Hosting\n• **Railway** - Bot Hosting\n• **R2 Cloud Storage** - File Storage\n• **Discord.py** - Bot Framework\n• **Three.js** - 3D Viewer",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="8Bit | Renderer",
+        icon_url=str(bot.user.avatar.url) if bot.user and bot.user.avatar else None
+    )
+    
+    await ctx.send(embed=embed)
+
 @bot.command(name="systeminfo", aliases=["si", "sys", "info"])
 async def systeminfo_prefix(ctx):
     """Prefix version of /systeminfo command"""
@@ -1926,7 +2056,7 @@ async def image2link_prefix(ctx):
     min_value="Minimum value (default: 1)",
     max_value="Maximum value (default: 100)"
 )
-@app_commands.checks.cooldown(3, 5.0, key=lambda i: (i.guild_id, i.user.id))  # 3 uses per 5 seconds
+@cooldown_with_exemption(3, 5.0, key=lambda i: (i.guild_id, i.user.id))  # 3 uses per 5 seconds (exempt role bypasses)
 async def random_command(interaction: discord.Interaction, min_value: int = 1, max_value: int = 100):
     """Generate a random number"""
     if not has_member_access(interaction.user):
@@ -1968,7 +2098,7 @@ async def random_command(interaction: discord.Interaction, min_value: int = 1, m
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="flip", description="Flip a coin", guild=discord.Object(id=ALLOWED_GUILD_ID))
-@app_commands.checks.cooldown(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds
+@cooldown_with_exemption(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds (exempt role bypasses)
 async def flip_command(interaction: discord.Interaction):
     """Flip a coin"""
     if not has_member_access(interaction.user):
@@ -1997,7 +2127,7 @@ async def flip_command(interaction: discord.Interaction):
     sides="Number of sides (default: 6)",
     count="Number of dice to roll (default: 1, max: 10)"
 )
-@app_commands.checks.cooldown(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds
+@cooldown_with_exemption(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds (exempt role bypasses)
 async def dice_command(interaction: discord.Interaction, sides: int = 6, count: int = 1):
     """Roll dice"""
     if not has_member_access(interaction.user):
@@ -2050,7 +2180,7 @@ async def dice_command(interaction: discord.Interaction, sides: int = 6, count: 
 @app_commands.describe(
     options="Options separated by commas (e.g., apple, banana, orange)"
 )
-@app_commands.checks.cooldown(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds
+@cooldown_with_exemption(5, 3.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 3 seconds (exempt role bypasses)
 async def choose_command(interaction: discord.Interaction, options: str):
     """Choose randomly from options"""
     if not has_member_access(interaction.user):
@@ -2258,6 +2388,7 @@ async def on_message(message: discord.Message):
                 ("`/list-duplicates`", "List builds with same file size", "DEVELOPER", ["*ld", "*list-duplicates"], None),
                 ("`/delete <model_id>`", "Delete a model from storage and cache", "DEVELOPER", ["*del", "*delete"], None),
                 ("`/uptime`", "View bot uptime", "MEMBER", ["*ut", "*uptime"], "10s (3x)"),
+                ("`/credits`", "View bot credits and information", "MEMBER", ["*credits", "*credit", "*about"], None),
                 ("`/systeminfo`", "View bot system information", "DEVELOPER", ["*si", "*systeminfo"], None),
                 ("`/image2link`", "Convert image to Discord CDN link", "MEMBER", ["*i2l", "*image2link"], "10s (5x)"),
                 ("`/random [min] [max]`", "Generate a random number", "MEMBER", ["*random", "*rand", "*rng"], "5s (3x)"),
@@ -2323,7 +2454,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 @tree.command(name="uptime", description="View bot uptime", guild=discord.Object(id=ALLOWED_GUILD_ID))
-@app_commands.checks.cooldown(3, 10.0, key=lambda i: (i.guild_id, i.user.id))  # 3 uses per 10 seconds
+@cooldown_with_exemption(3, 10.0, key=lambda i: (i.guild_id, i.user.id))  # 3 uses per 10 seconds (exempt role bypasses)
 async def uptime_command(interaction: discord.Interaction):
     """View bot uptime"""
     if not has_member_access(interaction.user):
@@ -2363,6 +2494,59 @@ async def uptime_command(interaction: discord.Interaction):
     )
     
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@tree.command(name="credits", description="View bot credits and information", guild=discord.Object(id=ALLOWED_GUILD_ID))
+async def credits_command(interaction: discord.Interaction):
+    """View bot credits and information"""
+    await interaction.response.defer(ephemeral=False)
+    
+    # Try to get the creator user
+    creator_id = 1149910630678134916
+    creator_mention = f"<@{creator_id}>"
+    try:
+        creator_user = await bot.fetch_user(creator_id)
+        creator_mention = creator_user.mention
+        creator_name = creator_user.display_name
+    except:
+        creator_name = "_zenix"
+    
+    embed = discord.Embed(
+        title="8Bit | Renderer - Credits",
+        description="**Thank you for using 8Bit Renderer!**\n\nThis bot was created with ❤️ by the 8Bit team.",
+        color=0x5865F2,
+        timestamp=datetime.now()
+    )
+    
+    embed.add_field(
+        name="👤 Bot Creator",
+        value=f"**{creator_name}**\n`{creator_id}`\n{creator_mention}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔧 API Creator",
+        value=f"**{creator_name}**\n`{creator_id}`\n{creator_mention}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="\u200b",
+        value="\u200b",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🛠️ Technologies & Services",
+        value="• **Flowkit** - 3D Model Preview Generation\n• **PythonAnywhere** - Backend Hosting\n• **Railway** - Bot Hosting\n• **R2 Cloud Storage** - File Storage\n• **Discord.py** - Bot Framework\n• **Three.js** - 3D Viewer",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="8Bit | Renderer",
+        icon_url=str(bot.user.avatar.url) if bot.user and bot.user.avatar else None
+    )
+    
+    await interaction.followup.send(embed=embed)
 
 @tree.command(name="systeminfo", description="View bot system information", guild=discord.Object(id=ALLOWED_GUILD_ID))
 async def systeminfo_command(interaction: discord.Interaction):
@@ -2537,7 +2721,7 @@ async def download_image_from_url(url: str) -> tuple[BytesIO, str]:
 @app_commands.describe(
     image="Image attachment to convert"
 )
-@app_commands.checks.cooldown(5, 10.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 10 seconds
+@cooldown_with_exemption(5, 10.0, key=lambda i: (i.guild_id, i.user.id))  # 5 uses per 10 seconds (exempt role bypasses)
 async def image2link_command(interaction: discord.Interaction, image: discord.Attachment = None):
     """Convert image to Discord CDN link"""
     if not has_member_access(interaction.user):
@@ -2623,6 +2807,12 @@ async def image2link_command(interaction: discord.Interaction, image: discord.At
 async def cooldown_error_handler(interaction: discord.Interaction, error: app_commands.AppCommandError):
     """Handle cooldown errors for slash commands"""
     if isinstance(error, app_commands.CommandOnCooldown):
+        # Check if user is exempt from cooldowns
+        if is_cooldown_exempt(interaction.user):
+            # User is exempt, bypass cooldown by not raising error
+            # The command will execute normally
+            return
+        
         retry_after = error.retry_after
         embed = discord.Embed(
             title="⏱️ Cooldown Active",
