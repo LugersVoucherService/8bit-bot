@@ -21,7 +21,7 @@ def generate_model_id() -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(12))
 
-async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: Optional[str] = None, build_size: Optional[int] = None) -> Optional[str]:
+async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: Optional[str] = None, build_size: Optional[int] = None, build_hash: Optional[str] = None) -> Optional[str]:
     """
     Upload GLTF file to the web server (memory-efficient for Railway)
     Returns the viewer URL if successful, None otherwise
@@ -54,10 +54,12 @@ async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: O
             'expires_in': 600  # 10 minutes
         }
         
-        # Add build file metadata for caching
+        # Add build file metadata for caching (using SHA-1 hash)
         if build_filename and build_size:
             data['build_filename'] = build_filename
             data['build_size'] = str(build_size)
+        if build_hash:
+            data['build_hash'] = build_hash
         
         headers = {
             'X-API-Secret': WEB_SERVER_SECRET
@@ -77,10 +79,20 @@ async def upload_gltf_to_server(gltf_path: str, model_id: str, build_filename: O
             result = response.json()
             # Clear data from memory
             del gltf_data
-            return result.get('url')
+            
+            viewer_url = result.get('url')
+            
+            # Preview will be generated client-side by viewer.js
+            # No server-side generation needed
+            
+            return viewer_url
     except Exception as e:
         print(f"Error uploading GLTF: {e}")
         return None
+
+
+# Preview generation is now handled client-side by viewer.js
+# No server-side preview generation needed
 
 async def check_web_server_health(server_url: Optional[str] = None) -> bool:
     """Check if the web server is available"""
@@ -193,16 +205,20 @@ async def get_cached_builds() -> Optional[dict]:
         print(f"Error getting cached builds: {e}")
     return None
 
-async def check_build_cache(filename: str, size: int) -> Optional[dict]:
-    """Check if a build file is cached (avoids re-rendering)"""
+def calculate_build_hash(build_content: bytes) -> str:
+    """Calculate SHA-1 hash of build file content for deterministic caching"""
+    import hashlib
+    return hashlib.sha1(build_content).hexdigest()
+
+async def check_build_cache(build_hash: str) -> Optional[dict]:
+    """Check if a build file is cached using SHA-1 hash (avoids re-rendering)"""
     server_url = await get_active_server_url()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
                 f"{server_url}/api/check-cache",
                 json={
-                    'filename': filename,
-                    'size': size
+                    'hash': build_hash
                 },
                 headers={
                     'X-API-Secret': WEB_SERVER_SECRET,

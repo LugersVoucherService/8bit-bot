@@ -219,11 +219,16 @@ async def render_command(
         return
     
     try:
-        from utils import check_build_cache, write_file_async, calculate_memory_usage
+        from utils import check_build_cache, write_file_async, calculate_memory_usage, calculate_build_hash
         import psutil
 
-        # Check cache first
-        cached = await check_build_cache(build_file.filename, build_file.size)
+        # Read build file content once and calculate SHA-1 hash
+        build_content = await build_file.read()
+        build_hash = calculate_build_hash(build_content)
+        print(f"[Cache] Build hash: {build_hash[:16]}... for {build_file.filename}")
+        
+        # Check cache first using SHA-1 hash
+        cached = await check_build_cache(build_hash)
 
         if cached:
             model_id = cached['model_id']
@@ -241,7 +246,7 @@ async def render_command(
             # If memory is too high, wait a bit and check cache again (another user might have uploaded)
             if memory.percent > 85:
                 await asyncio.sleep(0.5)  # Brief wait for concurrent uploads
-                cached = await check_build_cache(build_file.filename, build_file.size)
+                cached = await check_build_cache(build_hash)
                 if cached:
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
@@ -249,7 +254,6 @@ async def render_command(
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
-                    build_content = await build_file.read()
                     build_path = TEMP_DIR / f"temp_{build_file.filename}"
                     await write_file_async(build_path, build_content)
 
@@ -283,7 +287,7 @@ async def render_command(
                     await write_file_async(html_path, html_content.encode('utf-8'))
 
                     # Check cache one more time before upload (catch concurrent duplicates)
-                    cached = await check_build_cache(build_file.filename, build_file.size)
+                    cached = await check_build_cache(build_hash)
                     if cached:
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
@@ -296,13 +300,13 @@ async def render_command(
                             str(gltf_path),
                             model_id,
                             build_filename=build_file.filename,
-                            build_size=build_file.size
+                            build_size=build_file.size,
+                            build_hash=build_hash
                         )
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
             else:
                 # Memory is fine, proceed normally
-                build_content = await build_file.read()
                 build_path = TEMP_DIR / f"temp_{build_file.filename}"
                 await write_file_async(build_path, build_content)
 
@@ -336,7 +340,7 @@ async def render_command(
                 await write_file_async(html_path, html_content.encode('utf-8'))
 
                 # Check cache one more time before upload (catch concurrent duplicates)
-                cached = await check_build_cache(build_file.filename, build_file.size)
+                cached = await check_build_cache(build_hash)
                 if cached:
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
@@ -349,7 +353,8 @@ async def render_command(
                         str(gltf_path),
                         model_id,
                         build_filename=build_file.filename,
-                        build_size=build_file.size
+                        build_size=build_file.size,
+                        build_hash=build_hash
                     )
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
@@ -373,22 +378,112 @@ async def render_command(
 
         usage_stats = await get_usage_stats()
         expiry_timestamp = int((datetime.now() + timedelta(minutes=10)).timestamp())
-
+        
+        # Get preview URL if available (from cache)
+        preview_url = None
+        if cached:
+            preview_url = cached.get('preview_url')
+        
+        # Construct preview placeholder URL (will be updated when preview is ready)
+        server_url = await get_active_server_url()
+        preview_placeholder_url = f"{server_url}/api/model/{model_id}/preview"
+        
         embed = discord.Embed(
             title="Build Rendered",
             description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
             color=0x5865F2,
             timestamp=datetime.now()
         )
-
+        
+        # Add preview image (placeholder or actual if available)
         storage_pct = usage_stats.get('storage_percent', 0)
         a_class_pct = usage_stats.get('a_class_percent', 0)
         b_class_pct = usage_stats.get('b_class_percent', 0)
-        embed.set_footer(
-            text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-        )
+        
+        if preview_url:
+            embed.set_image(url=preview_url)
+            embed.set_footer(
+                text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+            )
+        else:
+            # Use placeholder - will be updated when preview is ready
+            embed.set_image(url=preview_placeholder_url)
+            embed.set_footer(
+                text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+            )
 
-        await interaction.followup.send(embed=embed)
+        message = await interaction.followup.send(embed=embed)
+        
+        # Store message info for later update (if preview not ready)
+        if not preview_url:
+            # Poll for preview every second for up to 60 seconds
+            async def poll_for_preview():
+                max_attempts = 60  # 60 seconds
+                attempt = 0
+                
+                while attempt < max_attempts:
+                    await asyncio.sleep(1)  # Wait 1 second between checks
+                    attempt += 1
+                    
+                    try:
+                        # Check if preview is ready
+                        from utils import get_active_server_url
+                        server_url = await get_active_server_url()
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            response = await client.get(f"{server_url}/api/model/{model_id}/info")
+                            if response.status_code == 200:
+                                data = response.json()
+                                preview_url_found = data.get('preview_url')
+                                
+                                if preview_url_found:
+                                    # Update embed with preview
+                                    print(f"[Bot] Preview found for {model_id} after {attempt} seconds: {preview_url_found}")
+                                    new_embed = discord.Embed(
+                                        title="Build Rendered",
+                                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                        color=0x5865F2,
+                                        timestamp=datetime.now()
+                                    )
+                                    new_embed.set_image(url=preview_url_found)
+                                    storage_pct = usage_stats.get('storage_percent', 0)
+                                    a_class_pct = usage_stats.get('a_class_percent', 0)
+                                    b_class_pct = usage_stats.get('b_class_percent', 0)
+                                    new_embed.set_footer(
+                                        text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                                    )
+                                    await message.edit(embed=new_embed)
+                                    print(f"[Bot] ✅ Updated embed with preview for {model_id}")
+                                    return  # Success - stop polling
+                                else:
+                                    print(f"[Bot] Preview not ready for {model_id} (attempt {attempt}/{max_attempts})")
+                            else:
+                                print(f"[Bot] Error checking preview for {model_id}: HTTP {response.status_code}")
+                    except Exception as e:
+                        print(f"[Bot] Error checking preview for {model_id} (attempt {attempt}): {e}")
+                
+                # If we get here, preview wasn't found after 60 seconds
+                print(f"[Bot] ⚠️ Preview not found for {model_id} after {max_attempts} seconds")
+                try:
+                    # Update embed to show "No Preview Available"
+                    new_embed = discord.Embed(
+                        title="Build Rendered",
+                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                        color=0x5865F2,
+                        timestamp=datetime.now()
+                    )
+                    storage_pct = usage_stats.get('storage_percent', 0)
+                    a_class_pct = usage_stats.get('a_class_percent', 0)
+                    b_class_pct = usage_stats.get('b_class_percent', 0)
+                    new_embed.set_footer(
+                        text=f"No Preview Available | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                    )
+                    await message.edit(embed=new_embed)
+                except Exception as e:
+                    print(f"[Bot] Error updating embed with 'No Preview Available': {e}")
+            
+            # Start polling for preview
+            print(f"[Bot] Starting preview polling for {model_id}")
+            asyncio.create_task(poll_for_preview())
 
         force_garbage_collection()
         
@@ -689,7 +784,6 @@ async def delete_command(interaction: discord.Interaction, model_id: str):
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ==================== PERMISSION MANAGEMENT COMMANDS (Owner Only) ====================
 
 @tree.command(name="check-permissions", description="Check who has specific permissions (Owner only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
 @app_commands.describe(
@@ -1129,11 +1223,15 @@ async def render_prefix(ctx, index: int = None):
         return
     
     try:
-        from utils import check_build_cache, write_file_async, calculate_memory_usage
+        from utils import check_build_cache, write_file_async, calculate_memory_usage, calculate_build_hash, get_active_server_url
         import psutil
 
-        # Check cache first
-        cached = await check_build_cache(build_file.filename, build_file.size)
+        # Read build file content once and calculate SHA-1 hash
+        build_content = await build_file.read()
+        build_hash = calculate_build_hash(build_content)
+        
+        # Check cache first using SHA-1 hash
+        cached = await check_build_cache(build_hash)
 
         if cached:
             model_id = cached['model_id']
@@ -1151,7 +1249,7 @@ async def render_prefix(ctx, index: int = None):
             # If memory is too high, wait a bit and check cache again (another user might have uploaded)
             if memory.percent > 85:
                 await asyncio.sleep(0.5)  # Brief wait for concurrent uploads
-                cached = await check_build_cache(build_file.filename, build_file.size)
+                cached = await check_build_cache(build_hash)
                 if cached:
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
@@ -1159,7 +1257,6 @@ async def render_prefix(ctx, index: int = None):
                     print(f"Cache hit after wait: {build_file.filename} ({build_file.size} bytes) -> {model_id}")
                 else:
                     # Still no cache, proceed with render
-                    build_content = await build_file.read()
                     build_path = TEMP_DIR / f"temp_{build_file.filename}"
                     await write_file_async(build_path, build_content)
 
@@ -1193,7 +1290,7 @@ async def render_prefix(ctx, index: int = None):
                     await write_file_async(html_path, html_content.encode('utf-8'))
 
                     # Check cache one more time before upload (catch concurrent duplicates)
-                    cached = await check_build_cache(build_file.filename, build_file.size)
+                    cached = await check_build_cache(build_hash)
                     if cached:
                         model_id = cached['model_id']
                         server_url = await get_active_server_url()
@@ -1206,13 +1303,13 @@ async def render_prefix(ctx, index: int = None):
                             str(gltf_path),
                             model_id,
                             build_filename=build_file.filename,
-                            build_size=build_file.size
+                            build_size=build_file.size,
+                            build_hash=build_hash
                         )
                         cleanup_temp_files(build_path)
                         cleanup_temp_files(gltf_dir)
             else:
                 # Memory is fine, proceed normally
-                build_content = await build_file.read()
                 build_path = TEMP_DIR / f"temp_{build_file.filename}"
                 await write_file_async(build_path, build_content)
 
@@ -1246,7 +1343,7 @@ async def render_prefix(ctx, index: int = None):
                 await write_file_async(html_path, html_content.encode('utf-8'))
 
                 # Check cache one more time before upload (catch concurrent duplicates)
-                cached = await check_build_cache(build_file.filename, build_file.size)
+                cached = await check_build_cache(build_hash)
                 if cached:
                     model_id = cached['model_id']
                     server_url = await get_active_server_url()
@@ -1259,7 +1356,8 @@ async def render_prefix(ctx, index: int = None):
                         str(gltf_path),
                         model_id,
                         build_filename=build_file.filename,
-                        build_size=build_file.size
+                        build_size=build_file.size,
+                        build_hash=build_hash
                     )
                     cleanup_temp_files(build_path)
                     cleanup_temp_files(gltf_dir)
@@ -1276,6 +1374,26 @@ async def render_prefix(ctx, index: int = None):
         usage_stats = await get_usage_stats()
         expiry_timestamp = int((datetime.now() + timedelta(minutes=10)).timestamp())
         
+        # Get preview URL if available (from cache or upload response)
+        preview_url = None
+        if cached:
+            preview_url = cached.get('preview_url')
+        else:
+            # Try to get preview from model info
+            try:
+                from utils import get_active_server_url
+                server_url = await get_active_server_url()
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.get(f"{server_url}/api/model/{model_id}/info")
+                    if response.status_code == 200:
+                        data = response.json()
+                        preview_url = data.get('preview_url')
+            except Exception as e:
+                print(f"Error getting preview URL: {e}")
+        
+        # Create embed with preview placeholder if no preview yet
+        preview_placeholder_url = "https://via.placeholder.com/512x512/1a1a1a/5865F2?text=Preview+Loading..."
+        
         embed = discord.Embed(
             title="Build Rendered",
             description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
@@ -1286,11 +1404,91 @@ async def render_prefix(ctx, index: int = None):
         storage_pct = usage_stats.get('storage_percent', 0)
         a_class_pct = usage_stats.get('a_class_percent', 0)
         b_class_pct = usage_stats.get('b_class_percent', 0)
-        embed.set_footer(
-            text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
-        )
         
-        await ctx.send(embed=embed)
+        if preview_url:
+            embed.set_image(url=preview_url)
+            embed.set_footer(
+                text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+            )
+        else:
+            embed.set_image(url=preview_placeholder_url)
+            embed.set_footer(
+                text=f"Preview loading... | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+            )
+        
+        message = await ctx.send(embed=embed)
+        
+        # Store message info for later update (if preview not ready)
+        if not preview_url:
+            # Poll for preview every second for up to 60 seconds
+            async def poll_for_preview():
+                max_attempts = 60  # 60 seconds
+                attempt = 0
+                
+                while attempt < max_attempts:
+                    await asyncio.sleep(1)  # Wait 1 second between checks
+                    attempt += 1
+                    
+                    try:
+                        # Check if preview is ready
+                        from utils import get_active_server_url
+                        server_url = await get_active_server_url()
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            response = await client.get(f"{server_url}/api/model/{model_id}/info")
+                            if response.status_code == 200:
+                                data = response.json()
+                                preview_url_found = data.get('preview_url')
+                                
+                                if preview_url_found:
+                                    # Update embed with preview
+                                    print(f"[Bot] Preview found for {model_id} after {attempt} seconds: {preview_url_found}")
+                                    new_embed = discord.Embed(
+                                        title="Build Rendered",
+                                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                                        color=0x5865F2,
+                                        timestamp=datetime.now()
+                                    )
+                                    new_embed.set_image(url=preview_url_found)
+                                    storage_pct = usage_stats.get('storage_percent', 0)
+                                    a_class_pct = usage_stats.get('a_class_percent', 0)
+                                    b_class_pct = usage_stats.get('b_class_percent', 0)
+                                    new_embed.set_footer(
+                                        text=f"Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                                    )
+                                    await message.edit(embed=new_embed)
+                                    print(f"[Bot] ✅ Updated embed with preview for {model_id}")
+                                    return  # Success - stop polling
+                                else:
+                                    print(f"[Bot] Preview not ready for {model_id} (attempt {attempt}/{max_attempts})")
+                            else:
+                                print(f"[Bot] Error checking preview for {model_id}: HTTP {response.status_code}")
+                    except Exception as e:
+                        print(f"[Bot] Error checking preview for {model_id} (attempt {attempt}): {e}")
+                
+                # If we get here, preview wasn't found after 60 seconds
+                print(f"[Bot] ⚠️ Preview not found for {model_id} after {max_attempts} seconds")
+                try:
+                    # Update embed to show "No Preview Available"
+                    new_embed = discord.Embed(
+                        title="Build Rendered",
+                        description=f"**Viewer:** [Open 3D Model]({viewer_url})\n\nExpires <t:{expiry_timestamp}:R>",
+                        color=0x5865F2,
+                        timestamp=datetime.now()
+                    )
+                    storage_pct = usage_stats.get('storage_percent', 0)
+                    a_class_pct = usage_stats.get('a_class_percent', 0)
+                    b_class_pct = usage_stats.get('b_class_percent', 0)
+                    new_embed.set_footer(
+                        text=f"No Preview Available | Storage: {storage_pct:.1f}% | A-class: {a_class_pct:.2f}% | B-class: {b_class_pct:.2f}%"
+                    )
+                    await message.edit(embed=new_embed)
+                except Exception as e:
+                    print(f"[Bot] Error updating embed with 'No Preview Available': {e}")
+            
+            # Start polling for preview
+            print(f"[Bot] Starting preview polling for {model_id}")
+            asyncio.create_task(poll_for_preview())
+        
         force_garbage_collection()
         
     except Exception as e:
