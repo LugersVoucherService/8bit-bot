@@ -2947,6 +2947,129 @@ async def on_ready():
         import traceback
         traceback.print_exc()
 
+@tree.command(name="clearnopreviewcache", description="Clear cached builds with no preview URL (Devs only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
+async def clear_no_preview_cache_command(interaction: discord.Interaction):
+    """Clear cached builds that have no preview URL"""
+    if not has_dev_access(interaction.user):
+        embed = discord.Embed(
+            title="Access Denied",
+            description="You don't have permission to use this command.",
+            color=0xED4245
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        server_url = await get_active_server_url()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{server_url}/api/clear-cache",
+                headers={
+                    'X-API-Secret': WEB_SERVER_SECRET
+                }
+            )
+            
+        if response.status_code == 200:
+            data = response.json()
+            count = data.get('count', 0)
+            
+            embed = discord.Embed(
+                title="Cache Cleared",
+                description=f"Successfully cleared **{count}** cached builds that had no preview URL.",
+                color=0x57F287
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            embed = discord.Embed(
+                title="Error",
+                description=f"Failed to clear cache. Status: {response.status_code}\nResponse: {response.text}",
+                color=0xED4245
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        embed = discord.Embed(
+            title="Error",
+            description=f"An error occurred: {str(e)}",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+@tree.command(name="checkcache", description="Check cache statistics (Devs only)", guild=discord.Object(id=ALLOWED_GUILD_ID))
+async def check_cache_command(interaction: discord.Interaction):
+    """Check cache statistics"""
+    if not has_dev_access(interaction.user):
+        embed = discord.Embed(
+            title="Access Denied",
+            description="You don't have permission to use this command.",
+            color=0xED4245
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        server_url = await get_active_server_url()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{server_url}/api/cache-stats",
+                headers={
+                    'X-API-Secret': WEB_SERVER_SECRET
+                }
+            )
+            
+        if response.status_code == 200:
+            data = response.json()
+            stats = data.get('stats', {})
+            
+            total_builds = stats.get('total_builds', 0)
+            builds_without_preview = stats.get('builds_without_preview', 0)
+            total_size = stats.get('total_size_bytes', 0)
+            
+            # Format size
+            if total_size < 1024:
+                size_str = f"{total_size} B"
+            elif total_size < 1024 * 1024:
+                size_str = f"{total_size / 1024:.1f} KB"
+            else:
+                size_str = f"{total_size / (1024 * 1024):.1f} MB"
+            
+            embed = discord.Embed(
+                title="Cache Statistics",
+                description=f"**Total Cached Builds:** {total_builds}\n**Builds Without Preview:** {builds_without_preview}\n**Total Cache Size:** {size_str}",
+                color=0x5865F2,
+                timestamp=datetime.now()
+            )
+            
+            if builds_without_preview > 0:
+                embed.add_field(
+                    name="Cleanup Available", 
+                    value=f"You can clear {builds_without_preview} builds using `/clearnopreviewcache`",
+                    inline=False
+                )
+                
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            embed = discord.Embed(
+                title="Error",
+                description=f"Failed to get cache stats. Status: {response.status_code}\nResponse: {response.text}",
+                color=0xED4245
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        embed = discord.Embed(
+            title="Error",
+            description=f"An error occurred: {str(e)}",
+            color=0xED4245
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 def main():
     if not DISCORD_BOT_TOKEN:
         exit(1)
