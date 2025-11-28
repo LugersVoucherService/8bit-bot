@@ -275,20 +275,17 @@ def calculate_build_hash(build_content: bytes) -> str:
     import hashlib
     return hashlib.sha1(build_content).hexdigest()
 
-async def check_build_cache(build_hash: str) -> Optional[dict]:
-    """Check if this SHA-1 exists inside the full build list"""
+async def check_build_cache(model_id: str) -> Optional[dict]:
     builds = await get_cached_builds()
     if not builds:
         return None
     
     for entry in builds:
-        # backend stores build_hash as dict key, so match manually
-        if entry.get("id") == build_hash or entry.get("filename") == build_hash:
+        if entry.get("id") == model_id:
             return entry
 
     return None
-
-
+    
 async def delete_model_from_backend(model_id: str) -> bool:
     """Delete a model from backend (R2 and cache)"""
     server_url = await get_active_server_url()
@@ -538,5 +535,6 @@ async def check_preview_ready(gltf_url: str) -> bool:
         return False
     except:
         return False
+
 
 
