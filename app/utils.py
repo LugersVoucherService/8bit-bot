@@ -254,22 +254,21 @@ async def get_usage_stats() -> dict:
         pass
     return {}
 
-async def get_cached_builds() -> Optional[dict]:
-    """Get all cached builds from backend"""
+async def get_cached_builds() -> Optional[list]:
+    """Get ALL cached builds from backend (not just 1)"""
     server_url = await get_active_server_url()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
                 f"{server_url}/api/builds",
-                headers={
-                    'X-API-Secret': WEB_SERVER_SECRET
-                }
+                headers={'X-API-Secret': WEB_SERVER_SECRET}
             )
-            if response.status_code == 200:
-                return response.json()
+            response.raise_for_status()
+            data = response.json()
+            return data.get("builds", [])
     except Exception as e:
-        print(f"Error getting cached builds: {e}")
-    return None
+        print(f"Error fetching cached builds: {e}")
+        return None
 
 def calculate_build_hash(build_content: bytes) -> str:
     """Calculate SHA-1 hash of build file content for deterministic caching"""
@@ -277,27 +276,18 @@ def calculate_build_hash(build_content: bytes) -> str:
     return hashlib.sha1(build_content).hexdigest()
 
 async def check_build_cache(build_hash: str) -> Optional[dict]:
-    """Check if a build file is cached using SHA-1 hash (avoids re-rendering)"""
-    server_url = await get_active_server_url()
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                f"{server_url}/api/check-cache",
-                json={
-                    'hash': build_hash
-                },
-                headers={
-                    'X-API-Secret': WEB_SERVER_SECRET,
-                    'Content-Type': 'application/json'
-                }
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('cached'):
-                    return data
-    except Exception as e:
-        print(f"Error checking cache: {e}")
+    """Check if this SHA-1 exists inside the full build list"""
+    builds = await get_cached_builds()
+    if not builds:
+        return None
+    
+    for entry in builds:
+        # backend stores build_hash as dict key, so match manually
+        if entry.get("id") == build_hash or entry.get("filename") == build_hash:
+            return entry
+
     return None
+
 
 async def delete_model_from_backend(model_id: str) -> bool:
     """Delete a model from backend (R2 and cache)"""
@@ -548,4 +538,5 @@ async def check_preview_ready(gltf_url: str) -> bool:
         return False
     except:
         return False
+
 
